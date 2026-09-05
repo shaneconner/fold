@@ -44,7 +44,7 @@ The forty-column bar uses full-height half-blocks for eighty steps of fill, foll
 
 The suffix reads `34% · commit at 55% · N Folds (X Cons., Y Span, Z Tool, X Pin, Y Mark)`. `N Folds` counts visible compressed folds; `Pin` counts protected entries and `Mark` counts pending marks, not additional compressed folds. A tool fold is lossless compression of tool-result context, not a count of tool calls. `/fold-status` retains the detailed token and nesting figures.
 
-Matching dashed guides show `minTarget`, where a commit aims to land, and `maxTarget`, where automatic folding is triggered. Before a measurement the row says `not measured yet`; after a commit it identifies the old reading until the provider measures again. Crossing the target is routine runtime work, not a user action item. Unavailable composition is stated as `mapping`; if folding stops, `FOLDING STOPPED` replaces the bar. Non-truecolor terminals use the theme's own colours.
+Matching dashed guides show `minTarget`, where a commit aims to land, and `maxTarget`, where automatic folding is triggered. Before a measurement the row says `not measured yet`; after a commit it identifies the old reading until the provider measures again. Crossing the target is routine runtime work, not a user action item. On reload, saved session context supplies the fold counts and composition without a new model message; the next real context event replaces that read-only view. Unavailable composition is stated as `mapping`; if folding stops, `FOLDING STOPPED` replaces the bar. Non-truecolor terminals use the theme's own colours.
 
 ## Results
 

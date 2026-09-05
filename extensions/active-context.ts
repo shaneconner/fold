@@ -731,7 +731,8 @@ export function registerActiveContext(pi: any, options: {
     /** The provider measurement the last landed commit ran against; the reading is
      *  stale while it is still the latest one. */
     staleSince: null as unknown,
-
+    /** Display-only reconstruction while waiting for the first real context event. */
+    startupSnapshot: null as ActiveContextSnapshot | null,
   };
   const installFoldBar = (ctx: any): void => {
     if (foldBar.installed || typeof ctx.ui?.setWidget !== "function") return;
@@ -760,7 +761,7 @@ export function registerActiveContext(pi: any, options: {
     // "5 staged, 0 to free" beside a status command pricing the same marks at 41,877
     // tokens (Shane, 2026-09-02, session 01a06272). The authoritative snapshot is memoized
     // on the branch length, so reading it here costs nothing while nothing has changed.
-    let snapshot = lifecycle.latestSnapshot;
+    let snapshot = lifecycle.latestSnapshot ?? foldBar.startupSnapshot;
     try { snapshot = authoritativeSnapshotFor(ctx); } catch { }
     const model: FoldBarModel = {
       brand: brandNoun,
@@ -1079,6 +1080,7 @@ export function registerActiveContext(pi: any, options: {
     cancelPreparation();
     lifecycle.latestSnapshot = null;
     lifecycle.latestSnapshotError = null;
+    foldBar.startupSnapshot = null;
     measurements.latestRatio = null;
     measurements.lastProviderMeasurement = null;
     measurements.wallInflowSteps.length = 0;
@@ -1181,6 +1183,13 @@ export function registerActiveContext(pi: any, options: {
     );
     measurements.latestRatio = contextUsageRatio(measurements.lastProviderMeasurement);
     persistence.persisted = clone(durableRestored);
+    // Reuse Pi's own reconstructed messages, including custom messages and branch
+    // selection. This is ONLY a view for the bar: do not populate latestSnapshot,
+    // advance the frontier, persist a projection, or pretend a provider event occurred.
+    if (typeof ctx.ui?.setWidget === "function" && Array.isArray(restoredMessages)) {
+      try { foldBar.startupSnapshot = snapshotForEvent(ctx, restoredMessages); }
+      catch { /* Keep the honest mapping fallback if the host cannot supply a view. */ }
+    }
     if (restoreError) safeNotify(
       ctx,
       `Active-context state was ignored; Pi native context remains authoritative: ${String(restoreError)}`,
@@ -3197,6 +3206,7 @@ export function registerActiveContext(pi: any, options: {
     try {
       const snapshot = snapshotForEvent(ctx, event.messages);
       lifecycle.latestSnapshot = snapshot;
+      foldBar.startupSnapshot = null;
       if (ladder.automaticFailure) {
         ladder.automaticFailure.suppressedCallbacks = Math.min(
           Number.MAX_SAFE_INTEGER,
@@ -4957,6 +4967,7 @@ export function registerActiveContext(pi: any, options: {
     curation.receipts = [];
     try { ctx.ui?.setStatus?.(entryTypePrefix, undefined); } catch { }
     foldBar.model = null;
+    foldBar.startupSnapshot = null;
     foldBar.requestRender?.();
   });
 

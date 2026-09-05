@@ -17347,6 +17347,88 @@ async function gateFoldCompositionCountsVisibleMass() {
   return { folds: model.folds, marks: model.stagedMarks, mass: model.mass };
 }
 
+/** Startup needs no new provider turn just to show the saved composition. The view
+ * is display-only: even an over-band saved measurement must not run the frontier or
+ * publish a pretend context event. Do NOT use startRuntime here: that helper sends one.
+ */
+async function gateFoldBarRestoresWithoutAContextEvent() {
+  const built = await chapterForest(6);
+  const thresholds = { maxTarget: .55, minTarget: .15, consolidateAfter: 6, minFoldChars: 100_000 };
+  const at = built.entries.findIndex((entry) => entry.id === built.turnEntries.at(-1)[0]) + 1;
+  const note = { type: "custom_message", id: "startup-note", parentId: built.entries[at - 1].id,
+    customType: "saved-note", display: false, content: "A custom message restored without a new request.",
+    timestamp: "2026-09-05T00:00:00.000Z" };
+  built.entries.splice(at, 0, note);
+  built.entries[at + 1].parentId = note.id;
+  built.messages = built.entries.flatMap(context.sessionEntryMessages);
+  const snapshot = context.mapActiveContext({ sessionId: built.sessionId, eventMessages: built.messages,
+    contextEntries: built.entries, contextWindow: 1_000_000, thresholds });
+  const parents = context.consolidationMarks({ state: built.state, snapshot, ordinal: 1 });
+  assert.equal(parents.length, 1, "the startup fixture has no pending parent");
+  const state = context.withPendingMarks(built.state, parents);
+  const runtime = makeRuntime(built, { thresholds, initialEntries: [
+    ...built.entries, stateEntry(built.sessionId, state, "startup-state", built.entries.at(-1).id),
+  ] });
+  runtime.appendMessage(measuredAssistant(600_000, 1_000_000, "saved successful response"));
+  runtime.usage = { tokens: 600_000, contextWindow: 1_000_000 };
+  runtime.ctx.sessionManager.buildSessionContext = () => ({ messages: runtime.branch.flatMap(context.sessionEntryMessages) });
+  let widget;
+  runtime.ctx.ui.theme = { fg: (_c, text) => text, bold: (text) => text, getColorMode: () => "256color" };
+  runtime.ctx.ui.setWidget = (_key, factory) => { widget = factory({ requestRender() {} }, runtime.ctx.ui.theme); };
+  const messagesBefore = runtime.messages.length;
+  const stateBefore = materialized(runtime);
+  await runtime.handlers.get("session_start")({ reason: "reload" }, runtime.ctx);
+  await settle();
+  const boot = structuredClone(widget.model);
+  assert.equal(boot.mapped, true, "the bar still waits for a new context event after reload");
+  assert(boot.share > thresholds.maxTarget, "the no-action fixture is not above the commit band");
+  assert.equal(boot.folds, 6);
+  assert.equal(boot.stagedMarks, 1);
+  assert.equal(boot.unplacedItems, 0);
+  const row = widget.render(220).join("\n");
+  assert(row.includes("6 Folds") && row.includes("1 Mark") && !/mapping|not measured/.test(row), row);
+  const restored = runtime.ctx.sessionManager.buildSessionContext().messages;
+  const rawSnapshot = context.mapActiveContext({ sessionId: built.sessionId, eventMessages: restored,
+    contextEntries: runtime.branch, contextWindow: 1_000_000, thresholds });
+  const hidden = new Set(state.folds.flatMap((fold) => context.flattenFoldRefs(fold, state)
+    .map((ref) => context.exactMapped(rawSnapshot, ref).index)));
+  const expectedRaw = restored.reduce((sum, message, i) => sum + (hidden.has(i) ? 0 : context.pricedBytes([message])), 0);
+  assert.equal(boot.mass.raw, expectedRaw, "startup mapping omitted saved custom messages");
+  assert.equal(runtime.messages.length, messagesBefore, "startup created a model message");
+  assert.equal(runtime.steered.length, 0, "startup nudged the model merely to refresh the bar");
+  assert(!contextEvents(runtime).some((event) => ["context.frontier", "context.commit", "context.fold", "context.projection"].includes(event.kind)),
+    "a display-only startup view ran context management");
+  assert.deepEqual(materialized(runtime), stateBefore, "drawing the restored bar changed durable state");
+  assert.equal((await toolStatus(runtime)).details.available, false,
+    "the display snapshot was promoted to an actual provider-context snapshot");
+
+  // The first REAL context may differ from the session tree (other extensions can add
+  // messages). It must replace the boot view rather than keeping a stale reconstruction.
+  await measure(runtime, 100_000, 1_000_000, "next response");
+  const extra = { role: "user", content: "Context-event-only material. ".repeat(200), timestamp: 1_000_001 };
+  await runtime.handlers.get("context")({ messages: [...runtime.messages, extra] }, runtime.ctx);
+  await settle();
+  assert(widget.model.mass.raw >= boot.mass.raw + context.pricedBytes([extra]), "the first real context did not replace the startup view");
+  assert.equal((await toolStatus(runtime)).details.available, true);
+
+  // A later lifecycle load must not retain a previous session/tree view if its new
+  // reconstruction is unavailable. Fail only the UI snapshot, not state restoration.
+  const contextEntries = runtime.ctx.sessionManager.buildContextEntries;
+  runtime.ctx.sessionManager.buildContextEntries = () => { throw new Error("startup view unavailable"); };
+  await runtime.handlers.get("session_tree")({}, runtime.ctx);
+  await settle();
+  assert.equal(widget.model.mapped, false, "an unavailable view reused the previous boot snapshot");
+  assert(widget.render(220).join("\n").includes("mapping"));
+  assert(!widget.render(220).join("\n").includes("FOLDING STOPPED"), "a failed UI reconstruction suspended the runtime");
+  runtime.ctx.sessionManager.buildContextEntries = contextEntries;
+  await runtime.handlers.get("session_tree")({}, runtime.ctx);
+  await settle();
+  assert.equal(widget.model.mapped, true, "a corrected host view did not restore the bar");
+  await runtime.handlers.get("session_shutdown")({}, runtime.ctx);
+  assert.deepEqual(widget.render(220), [], "shutdown retained the restored display");
+  return { folds: boot.folds, pending: boot.stagedMarks, startupShare: boot.share };
+}
+
 /**
  * GATE 166: WHAT A FOLD FREES IS PRICED BY THE IMAGE LAW (2026-09-03).
  *
@@ -17624,6 +17706,7 @@ const gates = [
   [167, "A re-cut span adopts its durable record", gateRecutSpanAdoptsItsDurableRecord],
   [168, "The status page advertises only actions the schema accepts", gateStatusPageAdvertisesSchemaActions],
   [169, "Fold composition counts visible mass once", gateFoldCompositionCountsVisibleMass],
+  [170, "The fold bar restores without a context event", gateFoldBarRestoresWithoutAContextEvent],
   // 138 is retired with the steward band (Shane 2026-08-23). It pinned a PRE-COMMIT
   // invitation, timed one band before the epoch so the agent was asked while marking
   // could still matter. The ask moves to fold time, where the agent has just seen the
