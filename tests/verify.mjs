@@ -17174,25 +17174,27 @@ async function gateCommitSurfacesTellTheTruth() {
   assert.equal(context.foldBarCells(model).length, 80, "forty columns did not provide eighty half-cell samples");
   const rendered = context.renderFoldBar(model, 220, plain);
   assert(!rendered.includes("\n") && !/usage|items|sections|tokens|nested|hide/.test(rendered));
-  assert(!/[▁▂▃▄▅▆▇▖▉▊]/.test(rendered) && !rendered.includes("[") && !rendered.includes("]"),
-    "the removed heights, scores, or brackets returned");
-  // THE GUIDES ARE NOTCHES, NOT BARS (Shane 2026-09-06, second pass: text ink over pink
-  // read as a white bar). Both are the right-eighth glyph at the column whose right edge
-  // is the share they name, neither dashed. Over the fill each takes the shade under it
-  // pulled toward the background, the commit deeper than the aim (asserted in the
-  // truecolor block below); without an RGB shade the commit is muted and the aim dim,
-  // never text, never bold, never a warning, never a palette shade of its own.
-  assert.equal(rendered.split("▕").length - 1, 2, "both guides must be drawn, as hairlines");
-  assert(!rendered.includes("┆"), "the dashed full-column guide returned");
+  assert(!/[▁▂▃▄▅▆▇▖▉▊]/.test(rendered), "the removed heights or scores returned");
+  // THE GUIDES ARE MARKS ON THE AXIS, NOT BREAKS IN THE FILL (Shane 2026-09-06, third
+  // pass: a text-ink hairline read as a white bar, and a notch cut into the fill read as
+  // a boundary between two kinds of content, which a threshold is not). The band is an
+  // interval: the aim opens a bracket and the commit point closes one, each at the
+  // column whose right edge is the share it names, drawn over the fill's own colour in
+  // whichever reference ink contrasts more with it (asserted in the truecolor block
+  // below, over navy and over pale pink). On the bare track the muted ink stands in;
+  // never bold, never a warning, never a palette shade of its own, never a hairline or
+  // a notch, since both of those were tried and rejected on a real terminal.
+  assert.equal(rendered.split("[").length - 1, 1, "the aim bracket must be drawn exactly once");
+  assert.equal(rendered.split("]").length - 1, 1, "the commit bracket must be drawn exactly once");
+  assert(rendered.indexOf("[") < rendered.indexOf("]"), "the aim bracket must open before the commit bracket closes");
+  assert(!rendered.includes("▕") && !rendered.includes("┆"), "a hairline or dashed guide returned");
+  assert.deepEqual(context.GUIDE_GLYPHS, { aim: "[", commit: "]" });
   const weighted = context.renderFoldBar(model, Number.POSITIVE_INFINITY, {
     fg: (colour, text) => (colour === "dim" ? `<D>${text}</D>` : colour === "muted" ? `<M>${text}</M>` : colour === "text" ? `<T>${text}</T>` : text),
     bold: (text) => `<B>${text}</B>`,
   });
-  assert.equal(weighted.split("<M>▕</M>").length - 1, 1, `the commit guide is not the muted hairline: ${weighted}`);
-  assert.equal(weighted.split("<D>▕</D>").length - 1, 1, `the aim guide is not the dim hairline: ${weighted}`);
-  assert(!weighted.includes("<T>▕") && !weighted.includes("<B>▕"), "a guide took text ink or bold");
-  assert(context.GUIDE_DEPTH.commit > context.GUIDE_DEPTH.aim && context.GUIDE_DEPTH.aim > 0 && context.GUIDE_DEPTH.commit < 1,
-    "the commit notch is not deeper than the aim notch");
+  assert.equal(weighted.split("<M>]</M>").length - 1, 1, `the commit bracket off the fill is not muted: ${weighted}`);
+  assert(!weighted.includes("<B>[") && !weighted.includes("<B>]"), "a guide took bold");
   const aimColumn = context.foldBarTicks(model).entries().find(([, kind]) => kind === "aim")[0];
   assert.equal(aimColumn, 7, "the aim at 20 percent is not the column whose right edge is 20 percent");
   assert.equal(context.foldBarCells(model)[2 * aimColumn + 1], "tick", "the guide does not reserve the right half");
@@ -17252,14 +17254,29 @@ async function gateCommitSurfacesTellTheTruth() {
       assert(text.includes(escape(palette[index]) + word), `the ${name} label's ${word} lost its item ink`);
     }
     assert(!text.includes("<A>"), `a truecolor theme fell back to the accent somewhere: ${text}`);
-    // The aim at .20 sits on column 7, whose left half is span (sample 14); its notch is
-    // span's own shade pulled toward the background, and the commit off the fill is muted.
+    // The aim at .20 sits on column 7, whose left half is span (sample 14): the bracket
+    // stands on span's own background in whichever reference ink contrasts more with
+    // span, and the fill continues behind it. The commit off the fill is muted.
     const dark = name === "dark";
-    const notch = context.guideShade(palette[1], dark, "aim");
-    assert(text.includes(escape(notch) + "▕"), `the ${name} aim notch is not span's shade cut toward the background: ${text}`);
-    assert(context.contrastRatio(notch, palette[1]) > 1.3 && context.contrastRatio(notch, palette[1]) < context.contrastRatio(context.guideShade(palette[1], dark, "commit"), palette[1]),
-      "the notch is invisible against its fill, or the commit cuts no deeper than the aim");
-    assert(!text.includes(escape(dark ? "#e6edf3" : "#1f2328") + "▕"), `the ${name} guide took the theme's text ink`);
+    // The background escape is the foreground one rewritten, so it carries a foreground
+    // reset before the bracket's own ink; the cell is background, reset, ink, glyph.
+    const over = (hex, glyph) => escape(hex).replace("[38;", "[48;") + "\x1b[39m" + escape(context.guideInk(hex)) + glyph;
+    assert(text.includes(over(palette[1], "[")), `the ${name} aim bracket is not the contrasting ink over span's own background: ${text}`);
+    // The clamp lifts every shade to 4.5:1 against the reference background, so the
+    // background ink is always the legible choice and the rule always lands on it.
+    for (const hex of palette) {
+      assert.equal(context.guideInk(hex), dark ? context.READABILITY.dark : context.READABILITY.light, `the ${name} bracket ink over ${hex} is not the reference background`);
+      assert(context.contrastRatio(context.guideInk(hex), hex) >= 4.5, `the bracket is not legible over ${hex}`);
+    }
+    assert(!text.includes(escape(dark ? "#e6edf3" : "#1f2328") + "["), `the ${name} guide took the theme's text ink`);
+    // The commit inside the pale pink pin fill takes the DARK reference ink, which is the
+    // whole point of choosing per cell: over the light end of a map a white mark vanishes.
+    const deep = { ...model, share: .90, aimShare: .20, commitShare: .80 };
+    const commitColumn = context.foldBarTicks(deep).entries().find(([, kind]) => kind === "commit")[0];
+    assert.equal(context.foldBarCells(deep)[2 * commitColumn], "pinned", "the fixture's commit point does not sit inside the pin fill");
+    assert(context.renderFoldBar(deep, 400, theme).includes(over(palette[5], "]")), `the ${name} commit bracket over pale pink is not drawn in the contrasting ink`);
+    assert.equal(context.guideInk("#FACCFA"), context.READABILITY.dark, "a bracket over raw pale pink took the light ink");
+    assert.equal(context.guideInk("#011959"), context.READABILITY.light, "a bracket over raw navy took the dark ink");
     for (const hex of palette) {
       assert(text.includes(escape(hex) + "█"), `the ${name} category lost its full-height ink`);
     }

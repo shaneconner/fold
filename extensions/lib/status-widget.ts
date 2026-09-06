@@ -188,16 +188,15 @@ export function readableOn(hex: string, dark: boolean): string {
   return rgbToHex(inGamut(passes, a, b));
 }
 
-/** How far a guide cuts into the fill: the shade under it moved toward the reference
- *  background by this share. The commit point is the one the label names, so it cuts
- *  deeper; the aim only matters at commit time, so it cuts less. */
-export const GUIDE_DEPTH = Object.freeze({ commit: 0.55, aim: 0.35 });
-/** A guide's ink over a shade: the same hue, pulled toward the background, so the line
- *  reads as a notch in the fill rather than a bar laid over it. */
-export function guideShade(hex: string, dark: boolean, kind: "aim" | "commit"): string {
-  const background = hexToRgb(dark ? READABILITY.dark : READABILITY.light);
-  const depth = GUIDE_DEPTH[kind];
-  return rgbToHex(hexToRgb(hex).map((v, i) => v * (1 - depth) + background[i] * depth));
+/** The glyph a guide draws: the band is an interval, so its floor opens a bracket and
+ *  its ceiling closes one. Marks, not breaks: the fill's own colour stays behind them. */
+export const GUIDE_GLYPHS = Object.freeze({ aim: "[", commit: "]" });
+/** A guide's ink over a shade: whichever of the two reference inks contrasts more with
+ *  the shade under it, near-white over the dark end of a map and near-black over the
+ *  light end, so a bracket over pale pink is as legible as one over navy. Neither is a
+ *  hue, so no guide competes with a category. */
+export function guideInk(under: string): string {
+  return contrastRatio(under, READABILITY.light) >= contrastRatio(under, READABILITY.dark) ? READABILITY.light : READABILITY.dark;
 }
 
 /** The shade a map holds at a position in [0, 1], interpolated between its samples. */
@@ -353,29 +352,30 @@ export function renderFoldBar(model: FoldBarModel, width: number, theme: FoldBar
     const basic = /^\x1b\[(3[0-7]|9[0-7])m$/.exec(fg);
     return basic ? `\x1b[${Number(basic[1]) + 10}m` : null;
   };
-  // THE GUIDES ARE NOTCHES, NOT BARS (Shane 2026-09-06, second pass). Text ink over
-  // pink read as a white bar and drew the eye from the fill it was meant to annotate.
-  // Over the fill a guide takes the shade under it, pulled toward the background: the
-  // commit point deeper than the aim, so weight still tells them apart. Neither takes
-  // its own hue, since a coloured guide competes with a category, and neither takes
-  // the warning ink, since folding is automatic and the person has nothing to do about
-  // it. On the bare track, or where no RGB shade is known, muted and dim ink stand in.
+  // THE GUIDES ARE MARKS ON THE AXIS, NOT BREAKS IN THE FILL (Shane 2026-09-06, third
+  // pass). A hairline in text ink read as a white bar; a notch cut into the fill read as
+  // a boundary between two kinds of content, which a threshold is not. The band is an
+  // interval, so the aim opens a bracket and the commit point closes one, each drawn
+  // over the fill's own colour in whichever reference ink contrasts more with it. No
+  // hue of its own, since a coloured guide competes with a category; never the warning
+  // ink, since folding is automatic and the person has nothing to do about it. On the
+  // bare track the muted ink stands in; without truecolor the bracket stands on the
+  // default background, because the theme's inks are the fill there.
   const shadeUnder = (left: typeof cells[number]): string | null =>
     truecolorMode && (FOLD_BAR_KINDS as readonly string[]).includes(left) ? shades[left as FoldBarKind] : null;
   const guide = (column: number, left: typeof cells[number]): string => {
-    const kind = ticks.get(column) ?? "aim";
+    const glyph = GUIDE_GLYPHS[ticks.get(column) ?? "aim"];
     const under = shadeUnder(left);
-    if (under) return truecolor(guideShade(under, dark, kind), "▕");
-    return theme.fg(kind === "commit" ? "muted" : "dim", "▕");
+    if (under) return `${background(left as FoldBarKind)}${truecolor(guideInk(under), glyph)}\x1b[49m`;
+    return theme.fg("muted", glyph);
   };
   let bar = "";
   for (let i = 0; i < cells.length; i += 2) {
     const left = cells[i], right = cells[i + 1];
     if (right === "tick") {
-      // The right-eighth hairline over the left half's own colour: the guide sits at the
-      // exact share it names and hides no fill. Off the fill it stands on the bare track.
-      const bg = left === "empty" ? null : background(left as FoldBarKind | "unknown");
-      bar += bg ? `${bg}${guide(i / 2, left)}\x1b[49m` : guide(i / 2, left);
+      // The bracket over the left half's own colour: the guide sits at the exact share
+      // it names and hides no fill. Off the fill it stands on the bare track.
+      bar += guide(i / 2, left);
       continue;
     }
     if (left === right) { bar += solid(left); continue; }
