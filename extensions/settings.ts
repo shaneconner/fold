@@ -29,6 +29,13 @@ import {
 	type ActiveContextThresholds,
 } from "./lib/policy.ts";
 import { applyLiveSettings, liveSettingsReachable } from "./lib/live-settings.ts";
+import {
+	COLOUR_MAP_NAMES,
+	DEFAULT_FOLD_BAR_PALETTE,
+	FoldBarPaletteError,
+	resolveFoldBarPalette,
+	type FoldBarPalette,
+} from "./lib/status-widget.ts";
 
 export const DEFAULT_FOLD_SETTINGS_PATH = join(
 	homedir(),
@@ -47,6 +54,11 @@ export interface FoldSettingsFile {
 	toolFoldThreshold?: number;
 	preCommitNotice?: boolean;
 	noticeLeadShare?: number;
+	// THE BAR'S COLOURS, stored whole for the same reason the thresholds are (2026-09-06):
+	// start and end may not coincide, which is a cross-field invariant, so a partial object
+	// would mean whatever the defaults are at read time. Absent means the package default.
+	// It is a display preference and moves nothing about folding.
+	palette?: FoldBarPalette;
 }
 
 // The four settings, named once. This was a hand-written union until the migration
@@ -63,10 +75,16 @@ const THRESHOLD_FIELDS = [
 // validation and no relationship to any other value on the screen.
 const SCALAR_FIELDS = ["toolFoldThreshold", "preCommitNotice", "noticeLeadShare"] as const;
 
-export type FoldSettingId = typeof THRESHOLD_FIELDS[number] | typeof SCALAR_FIELDS[number];
+// The three rows that edit the palette object, each naming the field it moves.
+const PALETTE_FIELDS = { paletteMap: "map", paletteStart: "start", paletteEnd: "end" } as const;
+
+export type FoldSettingId = typeof THRESHOLD_FIELDS[number] | typeof SCALAR_FIELDS[number] | keyof typeof PALETTE_FIELDS;
 
 function isThresholdField(id: FoldSettingId): id is typeof THRESHOLD_FIELDS[number] {
 	return (THRESHOLD_FIELDS as readonly string[]).includes(id);
+}
+function isPaletteField(id: FoldSettingId): id is keyof typeof PALETTE_FIELDS {
+	return Object.hasOwn(PALETTE_FIELDS, id);
 }
 
 // One edit, applied against the WHOLE draft: the merged thresholds object is
@@ -104,6 +122,20 @@ export function applyFoldSettingsEdit(
 			return { ok: false, error: "toolFoldThreshold is a share from 0 up to but not including 1; 0 turns it off" };
 		}
 		return { ok: true, draft: { ...draft, toolFoldThreshold: value } };
+	}
+	if (isPaletteField(id)) {
+		// The palette is re-validated WHOLE through the runtime's own resolver, so the
+		// cross-field rule (start and end differ) holds at every saved state.
+		const field = PALETTE_FIELDS[id];
+		const raw = rawValue.trim();
+		const value = field === "map" ? raw : Number(raw);
+		try {
+			const palette = resolveFoldBarPalette({ ...(draft.palette ?? DEFAULT_FOLD_BAR_PALETTE), [field]: value });
+			return { ok: true, draft: { ...draft, palette } };
+		} catch (error) {
+			if (error instanceof FoldBarPaletteError) return { ok: false, error: error.message };
+			throw error;
+		}
 	}
 	try {
 		const value = Number(rawValue.trim());
@@ -209,10 +241,10 @@ export function readFoldSettingsFile(path: string = DEFAULT_FOLD_SETTINGS_PATH):
 		dropped = true;
 	}
 	for (const key of Object.keys(parsed)) {
-		if (key === "thresholds" || (SCALAR_FIELDS as readonly string[]).includes(key)) continue;
+		if (key === "thresholds" || key === "palette" || (SCALAR_FIELDS as readonly string[]).includes(key)) continue;
 		if (RETIRED_FILE_KEYS.includes(key)) { delete parsed[key]; dropped = true; continue; }
 		return refused(`fold settings file has no ${key} field: the surface is ` +
-			`thresholds, ${SCALAR_FIELDS.join(", ")}`);
+			`thresholds, ${SCALAR_FIELDS.join(", ")}, palette`);
 	}
 	// The two scalars are validated the same way the editor validates them, through the
 	// one path, so a hand-edited file cannot hold a value the screen would refuse.
@@ -231,6 +263,12 @@ export function readFoldSettingsFile(path: string = DEFAULT_FOLD_SETTINGS_PATH):
 			return refused(`fold settings ${field} must be a number`);
 		}
 		Object.assign(scalars, applied.draft);
+	}
+	// The palette goes through the one resolver the runtime and the editor use, so a
+	// hand-edited file cannot hold a map name or a range the screen would refuse.
+	if (parsed.palette !== undefined) {
+		try { scalars.palette = resolveFoldBarPalette(parsed.palette); }
+		catch (error: any) { return refused(`fold settings palette is invalid: ${error?.message ?? error}`); }
 	}
 	if (parsed.thresholds === undefined) {
 		if (dropped) { try { saveFoldSettingsFile(path, scalars); } catch { } }
@@ -271,6 +309,7 @@ export function saveFoldSettingsFile(path: string, settings: FoldSettingsFile): 
 	if (settings.toolFoldThreshold !== undefined) clean.toolFoldThreshold = settings.toolFoldThreshold;
 	if (settings.preCommitNotice !== undefined) clean.preCommitNotice = settings.preCommitNotice;
 	if (settings.noticeLeadShare !== undefined) clean.noticeLeadShare = settings.noticeLeadShare;
+	if (settings.palette !== undefined) clean.palette = settings.palette;
 	mkdirSync(dirname(path), { recursive: true });
 	const temporary = `${path}.tmp`;
 	writeFileSync(temporary, `${JSON.stringify(clean, null, 2)}\n`);
@@ -297,6 +336,12 @@ const EDITOR_ROWS: readonly EditorRow[] = [
 	{ id: "toolFoldThreshold", label: "Clip old tool results", description: "The oldest share of the window shows tool results shortened, still recoverable in full. Off keeps them whole (toolFoldThreshold)" },
 	{ id: "preCommitNotice", label: "Tell the model before folding", description: "Show the model the window's status once as a fold approaches: what is staged, what is pinned, what it can change. Off is what the measured runs used (preCommitNotice)" },
 	{ id: "noticeLeadShare", label: "How early to tell it", description: "How far below the folding point that status appears. Only used when the notice is on (noticeLeadShare)" },
+	// THE BAR'S COLOURS ARE A CHOICE (Shane 2026-09-06). Three rows over one stored object:
+	// which map, and where on it the two ends of the ramp sit. The status line repaints on
+	// every step, so the bar itself is the preview.
+	{ id: "paletteMap", label: "Bar colours", description: "The colour map the status bar shades folded-to-raw content from. Pinned content always takes the theme accent (palette.map)" },
+	{ id: "paletteStart", label: "Folded shade at", description: "Where on that map the most compressed content sits. Put it past the raw end to run the map backwards (palette.start)" },
+	{ id: "paletteEnd", label: "Raw shade at", description: "Where on that map raw content sits. The three shades between are spaced evenly (palette.end)" },
 ];
 
 // The cycle lattice for both shares. Shares step in cents so no float drift reaches a
@@ -326,6 +371,9 @@ const MIN_FOLD_CHOICES = [2_000, 4_000, 6_000, 8_000, 12_000, 16_000, 24_000, 32
 // off: without a 0 here the only way to decline in-view clipping would be the file.
 const TOOL_FOLD_CHOICES = [0, 0.25, 0.35, 0.50, 0.65, 0.75, 0.90];
 
+// Positions on a colour map, the whole of it in twentieths, ends included.
+const MAP_POSITION_CHOICES = Array.from({ length: 21 }, (_, i) => i / 20);
+
 function shareCandidates(): number[] {
 	const { min, max, step } = SHARE_LATTICE;
 	const values: number[] = [];
@@ -337,8 +385,13 @@ function shareCandidates(): number[] {
 
 // The lattice a row steps along, as numbers. Display belongs to rowDisplayValue and
 // only to it: this list is stepped, never shown.
-function allowedValues(id: FoldSettingId, thresholds: ActiveContextThresholds): number[] {
+function allowedValues(id: FoldSettingId, thresholds: ActiveContextThresholds, palette: FoldBarPalette): number[] {
 	if (id === "toolFoldThreshold") return TOOL_FOLD_CHOICES;
+	// Each end of the ramp may step anywhere on the map except onto the other end: the
+	// cross-field rule is the filter, so stepping across the other end is one keypress.
+	if (id === "paletteStart") return MAP_POSITION_CHOICES.filter((v) => Math.abs(v - palette.end) > 1e-9);
+	if (id === "paletteEnd") return MAP_POSITION_CHOICES.filter((v) => Math.abs(v - palette.start) > 1e-9);
+	if (id === "paletteMap") return [];
 	// THE LEAD STEPS THE ONE SHARE LATTICE, unfiltered. It answers to nothing but its own
 	// range: a lead wider than the trigger is legal and means "speak from the first
 	// measurement", which the runtime floors rather than refuses, so there is no
@@ -359,6 +412,7 @@ function rowRawValue(settings: FoldSettingsFile, id: FoldSettingId): string {
 	// A SCALAR THAT IS ABSENT READS AS THE PACKAGE DEFAULT, never as zero or false. The
 	// file omits what was never set on purpose, so the screen has to supply the same
 	// value the runtime would, or the row would show a setting nobody chose.
+	if (isPaletteField(id)) return String((settings.palette ?? DEFAULT_FOLD_BAR_PALETTE)[PALETTE_FIELDS[id]]);
 	if (!isThresholdField(id)) {
 		if (id === "toolFoldThreshold") return String(settings.toolFoldThreshold ?? DEFAULT_TOOL_FOLD_THRESHOLD);
 		if (id === "noticeLeadShare") return String(settings.noticeLeadShare ?? DEFAULT_NOTICE_LEAD_SHARE);
@@ -384,6 +438,13 @@ function rowDisplayValue(settings: FoldSettingsFile, id: FoldSettingId, budgetTo
 	}
 	if (id === "consolidateAfter") return raw;
 	if (id === "minFoldChars") return `${Number(raw).toLocaleString("en-US")} characters`;
+	if (id === "paletteMap") return raw;
+	if (id === "paletteStart" || id === "paletteEnd") {
+		// A POSITION ON THE MAP, not a share of the window: the percentages elsewhere on this
+		// screen are occupancy, and this one is not, so it says what it is along.
+		const position = Number(raw);
+		return position === 0 ? "start of the map" : position === 1 ? "end of the map" : `${Math.round(position * 100)}% along the map`;
+	}
 	// A PERCENTAGE, like every other human surface. The screen used to read "0.80" while
 	// the status line, /fold-status and the editor header all said "80%", so the one place
 	// a person CHANGES the number spoke a different dialect from the three that report it.
@@ -539,8 +600,14 @@ export class FoldSettingsEditor extends Container {
 			this.applyAndSave(id, rowRawValue(this.draft, id) === "true" ? "false" : "true");
 			return;
 		}
+		// A NAMED LIST steps by index, clamped at its ends like every other row.
+		if (id === "paletteMap") {
+			const at = (COLOUR_MAP_NAMES as readonly string[]).indexOf(rowRawValue(this.draft, id)) + direction;
+			if (at >= 0 && at < COLOUR_MAP_NAMES.length) this.applyAndSave(id, COLOUR_MAP_NAMES[at]);
+			return;
+		}
 		const thresholds = this.draft.thresholds ?? DEFAULT_THRESHOLDS;
-		const candidates = allowedValues(id, thresholds);
+		const candidates = allowedValues(id, thresholds, this.draft.palette ?? DEFAULT_FOLD_BAR_PALETTE);
 		const current = Number(rowRawValue(this.draft, id));
 		const target = direction > 0
 			? candidates.find((candidate) => candidate > current + 1e-9)
@@ -595,7 +662,7 @@ export function registerFoldSettings(
 ): void {
 	const settingsPath = options.settingsPath ?? DEFAULT_FOLD_SETTINGS_PATH;
 	pi.registerCommand("fold-settings", {
-		description: "Configure pi-fold: commit band, consolidation, fold size, tool-result clipping, brief invitation",
+		description: "Configure pi-fold: commit band, consolidation, fold size, tool-result clipping, the pre-commit notice, bar colours",
 		handler: async (_args: string, ctx: any) => {
 			if (typeof ctx.ui?.custom !== "function") {
 				throw new Error("/fold-settings needs an interactive UI; set thresholds in the settings file instead");

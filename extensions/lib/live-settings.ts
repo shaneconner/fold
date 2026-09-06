@@ -25,6 +25,7 @@
 // deployment) still agrees on the property.
 
 import type { ActiveContextThresholds } from "./policy.ts";
+import type { FoldBarPalette } from "./status-widget.ts";
 
 /**
  * What the settings screen hands the runtime: exactly the settings FILE's shape, where an
@@ -37,6 +38,7 @@ export interface LiveFoldSettings {
 	toolFoldThreshold?: number;
 	preCommitNotice?: boolean;
 	noticeLeadShare?: number;
+	palette?: FoldBarPalette;
 }
 
 /** Refuses by throwing, exactly as registration does, and leaves the runtime untouched. */

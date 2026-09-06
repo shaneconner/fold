@@ -8594,6 +8594,9 @@ async function gatePublicOptionSurface() {
   // `workingMemory` sat here from 2026-08-26 until it was DELETED on 2026-08-28: one
   // sealed run was offered the channel and never called it once. Gate 149 is retired and
   // its number stays spent; the name is refused below beside the other deletions.
+  // SEVEN since 2026-09-06 with `palette`, the fold bar's colour map and range: a display
+  // preference that moves nothing about folding, on the surface only because the
+  // deployment hands the settings file to registration whole (gate 171 owns its behaviour).
   const surface = makeRuntime(built, {
     packageRegistration: true,
     retiredOptions: {
@@ -8603,6 +8606,7 @@ async function gatePublicOptionSurface() {
       toolFoldThreshold: 0.5,
       preCommitNotice: false,
       noticeLeadShare: 0.10,
+      palette: { map: "viridis", start: 0.1, end: 0.9 },
     },
   });
   assert.deepEqual(Object.keys(surface.registration), ["projectionCandidates"]);
@@ -8682,8 +8686,9 @@ async function gatePublicOptionSurface() {
   // allow-list across either. The seam is wider than the door; it is not laxer.
   assert.throws(() => makeRuntime(built, { retiredOptions: { autoFoldableTools: new Set(["read"]) } }),
     /autoFoldableTools is now blacklistAutoFoldTools, and the sense is INVERTED/);
+  assert.throws(() => register({ palette: { map: "jet", start: 0, end: 1 } }), /palette\.map must be one of batlow/);
   return {
-    publicOptions: 6,
+    publicOptions: 7,
     renamesRefusedByOldName: renamed.length,
     identityOptionsRefused: 6,
     unknownNamesRefused: 2,
@@ -17078,7 +17083,7 @@ async function gateCommitSurfacesTellTheTruth() {
   await startRuntime(runtime);
   const row = () => widget.render(200).join("\n");
   assert.equal(widget?.options?.placement, "belowEditor", "the bar is not the footer's top row");
-  assert(/not measured yet/.test(row()) && !/[█▌░┆]/.test(row()),
+  assert(/not measured yet/.test(row()) && !/[█▌░▕]/.test(row()),
     `an unmeasured window drew a bar, which is a guess drawn: ${row()}`);
   assert.equal(runtime.statuses.at(-1).text, undefined,
     "the status string is still set beside a bar that carries every fact it carried");
@@ -17096,7 +17101,7 @@ async function gateCommitSurfacesTellTheTruth() {
     `the over-band reading alarms or is missing: ${overBand}`);
   const staged = /(\d+) Mark/.exec(before);
   assert(staged && Number(staged[1]) > 0, `the fixture staged nothing for /fold to commit: ${before}`);
-  assert(/\d+ Folds \(\d+ Cons\., \d+ Span, \d+ Tool, \d+ Pin, \d+ Mark\)/.test(before) && !/tokens|nested|to free/.test(before),
+  assert(/\d+ Folds \(\d+ Cons\., \d+ Span, \d+ Tool, \d+ Mark, \d+ Pin\)/.test(before) && !/tokens|nested|to free/.test(before),
     `the compact inventory lost its requested format: ${before}`);
   assert.equal(widget.render(200).length, 1, "the removed second row returned");
 
@@ -17133,7 +17138,7 @@ async function gateCommitSurfacesTellTheTruth() {
 
   // WHAT IS HELD IS NAMED AND DRAWN (Shane 2026-09-04): pin the newest turn's entries
   // through the real tool and the row gains a pinned clause and pinned cells; the cells
-  // take the accent ink, the one class off the batlow ladder.
+  // take the accent ink, the one class off the colour map, on every colour mode.
   const newest = runtime.built.turnEntries.at(-1);
   await toolCall(runtime, { action: "pin", ids: [newest[0], newest.at(-1)] });
   await project(runtime);
@@ -17150,7 +17155,10 @@ async function gateCommitSurfacesTellTheTruth() {
 
   // The simplified surface is one full-height composition bar, not an item diagram.
   const plain = { fg: (_c, t) => t, bold: (t) => t };
-  const order = ["consolidated", "span", "tool", "pinned", "marked", "raw"];
+  // GROUPED BY DISTANCE FROM COMPRESSION (Shane 2026-09-06): folded kinds deepest first,
+  // then marked (folds next commit), raw (eligible later), pinned (held against every
+  // commit), so a sequential map reads as condensation and the pin sits at the fresh edge.
+  const order = ["consolidated", "span", "tool", "marked", "raw", "pinned"];
   assert.deepEqual([...context.FOLD_BAR_KINDS], order);
   const model = {
     brand: "pi-fold", share: 0.60, commitShare: 0.80, aimShare: 0.20, mapped: true,
@@ -17159,20 +17167,36 @@ async function gateCommitSurfacesTellTheTruth() {
     unplacedItems: 0, pinnedRefs: 1, weighed: false, staleAfterCommit: false, stopped: null,
   };
   const painted = (cells) => cells.filter((kind) => order.includes(kind));
-  assert.deepEqual(painted(context.foldBarCells(model)), order.flatMap((kind, i) => Array(i < 4 ? 8 : 7).fill(kind)),
+  // 48 filled samples less ONE reserved for the aim guide's hairline: a guide costs one
+  // half-cell, the right half of its column, not the whole column it used to take.
+  assert.deepEqual(painted(context.foldBarCells(model)), order.flatMap((kind, i) => Array(i < 5 ? 8 : 7).fill(kind)),
     "the six equal shares are not apportioned in order after reserving the guide slots");
   assert.equal(context.foldBarCells(model).length, 80, "forty columns did not provide eighty half-cell samples");
   const rendered = context.renderFoldBar(model, 220, plain);
   assert(!rendered.includes("\n") && !/usage|items|sections|tokens|nested|hide/.test(rendered));
   assert(!/[▁▂▃▄▅▆▇▖▉▊]/.test(rendered) && !rendered.includes("[") && !rendered.includes("]"),
     "the removed heights, scores, or brackets returned");
-  assert.equal(rendered.split("┆").length - 1, 2, "both targets must retain the same dashed style");
-  assert(rendered.endsWith("60% · commit at 80% · 3 Folds (1 Cons., 1 Span, 1 Tool, 1 Pin, 1 Mark)"), rendered);
+  // THE GUIDES ARE HAIRLINES, WEIGHTED, NEVER COLOURED (Shane 2026-09-06): the commit
+  // point in bold text ink, the aim dim, both the right-eighth glyph at the column whose
+  // right edge is the share they name, neither dashed and neither a palette shade.
+  assert.equal(rendered.split("▕").length - 1, 2, "both guides must be drawn, as hairlines");
+  assert(!rendered.includes("┆"), "the dashed full-column guide returned");
+  const weighted = context.renderFoldBar(model, Number.POSITIVE_INFINITY, {
+    fg: (colour, text) => (colour === "dim" ? `<D>${text}</D>` : colour === "text" ? `<T>${text}</T>` : text),
+    bold: (text) => `<B>${text}</B>`,
+  });
+  assert.equal(weighted.split("<T><B>▕</B></T>").length - 1, 1, `the commit guide is not the bold text hairline: ${weighted}`);
+  assert.equal(weighted.split("<D>▕</D>").length - 1, 1, `the aim guide is not the dim hairline: ${weighted}`);
+  const aimColumn = context.foldBarTicks(model).entries().find(([, kind]) => kind === "aim")[0];
+  assert.equal(aimColumn, 7, "the aim at 20 percent is not the column whose right edge is 20 percent");
+  assert.equal(context.foldBarCells(model)[2 * aimColumn + 1], "tick", "the guide does not reserve the right half");
+  assert.equal(order.includes(context.foldBarCells(model)[2 * aimColumn]), true, "the guide's left half lost its fill");
+  assert(rendered.endsWith("60% · commit at 80% · 3 Folds (1 Cons., 1 Span, 1 Tool, 1 Mark, 1 Pin)"), rendered);
   const mostlyRaw = { ...model, share: .5, mass: { ...context.emptyFoldBarMass(), marked: 5, raw: 95 } };
-  assert.deepEqual(painted(context.foldBarCells(mostlyRaw)), [...Array(2).fill("marked"), ...Array(36).fill("raw")],
+  assert.deepEqual(painted(context.foldBarCells(mostlyRaw)), [...Array(2).fill("marked"), ...Array(37).fill("raw")],
     "category widths stopped following mass above the visibility floor");
   const tiny = { ...model, share: .5, mass: { ...context.emptyFoldBarMass(), consolidated: 1, span: 1, raw: 9998 } };
-  assert.deepEqual(painted(context.foldBarCells(tiny)), ["consolidated", "span", ...Array(36).fill("raw")],
+  assert.deepEqual(painted(context.foldBarCells(tiny)), ["consolidated", "span", ...Array(37).fill("raw")],
     "nonempty compressed categories vanished instead of retaining one half-cell each");
   // All nonempty subsets, across scarcity and ordinary occupancy. Categories may not
   // steal space outside the measured fill, invent zero-mass colours, or hide behind a guide.
@@ -17200,11 +17224,14 @@ async function gateCommitSurfacesTellTheTruth() {
     assert(!line.includes("\n") && visibleWidth(line) <= width, `row overruns terminal width ${width}: ${line}`);
   }
 
-  // Body and label ink must agree, including pins and pending consolidations. Palette
-  // foreground contrast is measured against both reference backgrounds, not eyeballed.
+  // Body and label ink must agree, including pins and pending consolidations. The five
+  // ramp shades are the default palette's own, read through the runtime's shade function
+  // (gate 171 owns what that function promises); the pin is the accent, off the ramp.
+  const rampOrder = ["consolidated", "span", "tool", "marked", "raw"];
+  assert.deepEqual([...context.FOLD_BAR_RAMP], rampOrder);
   const colours = {
-    dark: ["#6C89C7", "#5B919F", "#729261", "#B38E2F", "#FBA689", "#FACCFA"],
-    light: ["#011959", "#185562", "#577647", "#927012", "#AA624A", "#8F6891"],
+    dark: rampOrder.map((kind) => context.foldBarShades(context.DEFAULT_FOLD_BAR_PALETTE, true)[kind]),
+    light: rampOrder.map((kind) => context.foldBarShades(context.DEFAULT_FOLD_BAR_PALETTE, false)[kind]),
   };
   const escape = (hex) => `\x1b[38;2;${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(";")}m`;
   const luminance = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
@@ -17212,11 +17239,14 @@ async function gateCommitSurfacesTellTheTruth() {
     .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
   for (const [name, palette] of Object.entries(colours)) {
     const theme = { ...plain, getColorMode: () => "truecolor",
+      fg: (colour, text) => (colour === "accent" ? `<A>${text}</A>` : text),
       getFgAnsi: () => escape(name === "dark" ? "#e6edf3" : "#1f2328") };
     const text = context.renderFoldBar(model, 400, theme);
-    for (const [word, index] of [["1 Cons.", 0], ["1 Span", 1], ["1 Tool", 2], ["1 Pin", 3], ["1 Mark", 4]]) {
+    for (const [word, index] of [["1 Cons.", 0], ["1 Span", 1], ["1 Tool", 2], ["1 Mark", 3]]) {
       assert(text.includes(escape(palette[index]) + word), `the ${name} label's ${word} lost its item ink`);
     }
+    assert(text.includes("<A>1 Pin</A>") && text.includes("<A>█</A>"),
+      `the ${name} pin is not the accent in body and label on a truecolor theme: ${text}`);
     for (const hex of palette) {
       assert(text.includes(escape(hex) + "█"), `the ${name} category lost its full-height ink`);
     }
@@ -17225,7 +17255,7 @@ async function gateCommitSurfacesTellTheTruth() {
     // The aim lies inside the measured fill. Without reserved guide slots it would
     // overwrite the final two singleton colours, so test the rendered bytes as well.
     const mixed = context.renderFoldBar({ ...model, share: .10, aimShare: .10,
-      mass: { consolidated: 1000, span: 1, tool: 1, pinned: 1, marked: 1, raw: 1 } }, 400, theme);
+      mass: { consolidated: 1000, span: 1, tool: 1, marked: 1, raw: 1, pinned: 1 } }, 400, theme);
     const bar = mixed.slice(0, mixed.indexOf(" "));
     assert.equal(visibleWidth(bar), 40, "half-cell precision made the bar wider");
     assert(bar.includes("▌") && bar.includes("\x1b[48;2;"), "two colours were not rendered inside a column");
@@ -17329,7 +17359,7 @@ async function gateFoldCompositionCountsVisibleMass() {
   assert.equal(model.folds, 6, "fold count came from edges or pending marks");
   assert.equal(model.unplacedItems, 0, "a properly reconstructed custom entry failed to map");
   const text = widget.render(600).join("\n");
-  assert(text.includes("6 Folds (0 Cons., 6 Span, 0 Tool, 0 Pin, 1 Mark)"));
+  assert(text.includes("6 Folds (0 Cons., 6 Span, 0 Tool, 1 Mark, 0 Pin)"));
   const stateBefore = materialized(runtime);
   await project(runtime);
   await settle();
@@ -17427,6 +17457,178 @@ async function gateFoldBarRestoresWithoutAContextEvent() {
   await runtime.handlers.get("session_shutdown")({}, runtime.ctx);
   assert.deepEqual(widget.render(220), [], "shutdown retained the restored display");
   return { folds: boot.folds, pending: boot.stagedMarks, startupShare: boot.share };
+}
+
+/**
+ * GATE 171: THE BAR'S COLOURS ARE A CHOICE, AND EVERY CHOICE STAYS READABLE (Shane
+ * 2026-09-06).
+ *
+ * Shane questioned whether Batlow end to end was the right map and concluded a person
+ * should choose and explore. The bar now reads its five folded-to-raw shades off a named
+ * colour map between a start and an end position, the pin sits off the ramp in the theme
+ * accent, and three rows on /fold-settings drive it with the status line as the preview.
+ *
+ * What this gate pins, in order:
+ *   - ONE RESOLVER for every path a palette arrives by: absent means Batlow end to end;
+ *     an unknown map, a position off the map, an unknown field and coincident ends are
+ *     each refused by name; a reversed range is legal and inverts the ramp.
+ *   - THE READABILITY CLAMP: every map, several ranges, both reference backgrounds,
+ *     every shade clears 4.5:1, a shade that already clears it is returned untouched, and
+ *     a shade that is moved keeps its hue (Batlow's navy stays blue rather than greying).
+ *     The clamp replaced two hand-adjusted hex tables that covered one map at one range.
+ *   - THE FILE AND THE SCREEN: the palette round-trips through the settings file whole,
+ *     an invalid one is refused with the defaults in force, the alien-key refusal names
+ *     the field, a step onto the other end is refused by the editor and skipped by the
+ *     row, and a stepped row reaches the running bar's model, the stream and the render.
+ */
+async function gateFoldBarPaletteIsAReadableChoice() {
+  const resolve = context.resolveFoldBarPalette;
+  assert.deepEqual(resolve(undefined), { map: "batlow", start: 0, end: 1 });
+  assert.deepEqual(resolve({ map: "plasma", start: 1, end: 0 }), { map: "plasma", start: 1, end: 0 });
+  for (const [value, pattern] of [
+    [{ map: "jet", start: 0, end: 1 }, /palette\.map must be one of batlow, viridis, plasma, magma, cividis/],
+    [{ map: "batlow", start: -0.1, end: 1 }, /palette\.start must be a position on the map from 0 to 1/],
+    [{ map: "batlow", start: 0, end: 1.5 }, /palette\.end must be a position/],
+    [{ map: "batlow", start: 0.5, end: 0.5 }, /palette\.start and palette\.end must differ/],
+    [{ map: "batlow", start: 0, end: 1, reverse: true }, /palette has no reverse field: the fields are map, start, end/],
+    [["batlow"], /palette must be an object/],
+    [{ map: "batlow", start: "0", end: 1 }, /palette\.start must be a position/],
+  ]) {
+    assert.throws(() => resolve(value), pattern, `accepted ${JSON.stringify(value)}`);
+  }
+
+  // The tables are the maps themselves: Batlow's ends are Crameri's own, and a position
+  // between two samples interpolates rather than snapping.
+  assert.equal(context.sampleColourMap("batlow", 0), "#011959");
+  assert.equal(context.sampleColourMap("batlow", 1), "#FACCFA");
+  assert.equal(context.sampleColourMap("viridis", 0), "#440154");
+  assert.notEqual(context.sampleColourMap("batlow", 0.5), context.sampleColourMap("batlow", 0.51));
+
+  const ramp = [...context.FOLD_BAR_RAMP];
+  const ranges = [[0, 1], [1, 0], [0.15, 1], [0, 0.5], [0.4, 0.6], [0.95, 0.05]];
+  let clamped = 0, untouched = 0;
+  for (const map of context.COLOUR_MAP_NAMES) {
+    for (const [start, end] of ranges) {
+      for (const dark of [true, false]) {
+        const shades = context.foldBarShades({ map, start, end }, dark);
+        const background = dark ? context.READABILITY.dark : context.READABILITY.light;
+        for (const kind of ramp) {
+          assert(/^#[0-9A-F]{6}$/.test(shades[kind]), `${map} ${start}-${end} ${kind} is not an uppercase hex: ${shades[kind]}`);
+          const ratio = context.contrastRatio(shades[kind], background);
+          assert(ratio >= 4.5, `${map} ${start}-${end} ${kind} reads ${ratio.toFixed(2)}:1 on ${dark ? "dark" : "light"}`);
+          const position = start + (end - start) * (ramp.indexOf(kind) / (ramp.length - 1));
+          const raw = context.sampleColourMap(map, position);
+          if (context.contrastRatio(raw, background) >= 4.5) { assert.equal(shades[kind], raw, "a readable shade was moved"); untouched += 1; }
+          else { assert.notEqual(shades[kind], raw); clamped += 1; }
+        }
+        // The memo: the bar renders many times per choice, so the same choice is one object.
+        assert.equal(context.foldBarShades({ map, start, end }, dark), shades, "shades were recomputed for an unchanged palette");
+      }
+    }
+  }
+  assert(clamped > 0 && untouched > 0, `the fixture exercised only one side of the clamp (${clamped} moved, ${untouched} kept)`);
+  // Hue held: Batlow's navy on a dark terminal is lifted, not greyed or turned.
+  const navy = context.readableOn("#011959", true);
+  const [nr, ng, nb] = [1, 3, 5].map((i) => parseInt(navy.slice(i, i + 2), 16));
+  assert(nb > nr && nb > ng && nb - Math.max(nr, ng) > 24, `the lifted navy is no longer blue: ${navy}`);
+  assert.equal(context.readableOn("#FACCFA", true), "#FACCFA", "a shade already readable was touched");
+  assert.equal(context.readableOn("#011959", false), "#011959");
+  // A reversed range is the same ramp read the other way.
+  const forward = context.foldBarShades({ map: "batlow", start: 0, end: 1 }, true);
+  const backward = context.foldBarShades({ map: "batlow", start: 1, end: 0 }, true);
+  assert.equal(backward.consolidated, forward.raw);
+  assert.equal(backward.raw, forward.consolidated);
+  assert.equal(backward.tool, forward.tool);
+
+  // THE FILE. Whole, through the one resolver, and only written when set.
+  const scratch = await mkdtemp(join(tmpdir(), "fold-palette-"));
+  try {
+    const path = join(scratch, "settings.json");
+    settingsModule.saveFoldSettingsFile(path, { thresholds: { ...context.DEFAULT_THRESHOLDS } });
+    assert.equal(Object.hasOwn(JSON.parse(readFileSync(path, "utf8")), "palette"), false, "an unset palette was written out");
+    const chosen = { map: "magma", start: 0.2, end: 0.9 };
+    settingsModule.saveFoldSettingsFile(path, { thresholds: { ...context.DEFAULT_THRESHOLDS }, palette: chosen });
+    const loaded = settingsModule.readFoldSettingsFile(path);
+    assert.equal(loaded.refusal, null, loaded.refusal);
+    assert.deepEqual(loaded.settings.palette, chosen);
+    for (const [name, body, pattern] of [
+      ["map.json", { palette: { map: "jet", start: 0, end: 1 } }, /palette is invalid: palette\.map must be one of/],
+      ["same.json", { palette: { map: "batlow", start: 0.3, end: 0.3 } }, /palette\.start and palette\.end must differ/],
+      ["alien.json", { colours: "batlow" }, /no colours field: the surface is thresholds, toolFoldThreshold, preCommitNotice, noticeLeadShare, palette/],
+    ]) {
+      const file = join(scratch, name);
+      await writeFile(file, JSON.stringify(body));
+      const load = settingsModule.readFoldSettingsFile(file);
+      assert.deepEqual(load.settings, {}, `${name} was partly applied`);
+      assert(load.refusal && pattern.test(load.refusal) && /Package defaults are in force/.test(load.refusal), `${name}: ${load.refusal}`);
+    }
+    const edit = settingsModule.applyFoldSettingsEdit;
+    let draft = edit({}, "paletteMap", "cividis").draft;
+    assert.deepEqual(draft.palette, { map: "cividis", start: 0, end: 1 }, "an edit did not fill the rest from the default");
+    const onto = edit(draft, "paletteStart", "1");
+    assert.equal(onto.ok, false);
+    assert(/must differ/.test(onto.error), onto.error);
+    assert.equal(edit(draft, "paletteMap", "jet").ok, false);
+    draft = edit(draft, "paletteEnd", "0.35").draft;
+    assert.deepEqual(draft.palette, { map: "cividis", start: 0, end: 0.35 });
+
+    // THE SCREEN, on a host with a widget, so the bar's model is the thing the rows move.
+    // Registered the way the deployment registers: the settings FILE, read whole, is the
+    // registration options, which is why the palette had to be a public option at all.
+    const runtime = makeRuntime(
+      makeFixture({ turns: 8, resultChars: 3_000, sessionId: "palette-rows" }),
+      { packageRegistration: true, retiredOptions: settingsModule.loadFoldSettingsFile(path) },
+    );
+    settingsModule.registerFoldSettings(runtime.pi, { settingsPath: path });
+    let widget = null;
+    const escape = (hex) => `\x1b[38;2;${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(";")}m`;
+    runtime.ctx.ui.theme = { fg: (_c, t) => t, bold: (t) => t, getColorMode: () => "truecolor", getFgAnsi: () => escape("#e6edf3") };
+    runtime.ctx.ui.setWidget = (_key, factory) => { widget = factory({ requestRender() { } }, runtime.ctx.ui.theme); };
+    await startRuntime(runtime);
+    await measure(runtime, 60_000, 100_000);
+    await project(runtime);
+    await settle();
+    assert.deepEqual(widget.model.palette, chosen, "the session did not boot on the file's palette");
+    let screen = null;
+    runtime.ctx.ui.custom = async (factory) => { screen = factory({}, { fg: (_r, t) => t, bold: (t) => t }, {}, () => {}); };
+    await runtime.commands.get("fold-settings").handler("", runtime.ctx);
+    const rows = () => screen.render(160).join("\n");
+    assert(/Bar colours\s+magma/.test(rows()) && /Folded shade at\s+20% along the map/.test(rows()) && /Raw shade at\s+90% along the map/.test(rows()),
+      `the rows do not state the file's palette: ${rows()}`);
+    for (let i = 0; i < 7; i += 1) screen.handleInput("\x1b[B");
+    const before = runtime.appended.length;
+    screen.handleInput("\x1b[C");
+    await settle();
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).palette.map, "cividis", "stepping the map row did not reach disk");
+    assert.equal(widget.model.palette.map, "cividis", "the stepped map did not reach the running bar");
+    const events = contextEvents(runtime, before).filter((event) => event.kind === "context.settings");
+    assert.equal(events.length, 1, `one step wrote ${events.length} settings events`);
+    assert.deepEqual(events[0].changed, ["palette"]);
+    assert.deepEqual(events[0].palette, { map: "cividis", start: 0.2, end: 0.9 });
+    const shade = context.foldBarShades({ map: "cividis", start: 0.2, end: 0.9 }, true).raw;
+    assert(widget.render(400).join("\n").includes(escape(shade)), "the bar did not repaint in the chosen map");
+    // The map row clamps at the list's end rather than wrapping or refusing loudly.
+    screen.handleInput("\x1b[C");
+    assert.equal(widget.model.palette.map, "cividis");
+    // The raw end is at 0.9; stepping the folded end up from 0.2 lands on 0.85 then
+    // SKIPS 0.9 for 0.95, because coincident ends are not on the lattice.
+    screen.handleInput("\x1b[B");
+    for (let i = 0; i < 13; i += 1) screen.handleInput("\x1b[C");
+    assert.equal(widget.model.palette.start, 0.85);
+    screen.handleInput("\x1b[C");
+    assert.equal(widget.model.palette.start, 0.95, "the folded end stepped onto the raw end");
+    assert(/Folded shade at\s+95% along the map/.test(rows()), rows());
+    screen.handleInput("\x1b[B");
+    for (let i = 0; i < 2; i += 1) screen.handleInput("\x1b[C");
+    assert.equal(widget.model.palette.end, 1);
+    assert(/Raw shade at\s+end of the map/.test(rows()), rows());
+    // A refused push leaves the palette where it was, like every other live setting.
+    assert.throws(() => context.applyLiveSettings(runtime.pi, { palette: { map: "batlow", start: 0.5, end: 0.5 } }), /must differ/);
+    assert.deepEqual(widget.model.palette, { map: "cividis", start: 0.95, end: 1 });
+    return { maps: context.COLOUR_MAP_NAMES.length, ranges: ranges.length, clamped, untouched, navy };
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -17707,6 +17909,7 @@ const gates = [
   [168, "The status page advertises only actions the schema accepts", gateStatusPageAdvertisesSchemaActions],
   [169, "Fold composition counts visible mass once", gateFoldCompositionCountsVisibleMass],
   [170, "The fold bar restores without a context event", gateFoldBarRestoresWithoutAContextEvent],
+  [171, "The bar's colours are a choice, and every choice stays readable", gateFoldBarPaletteIsAReadableChoice],
   // 138 is retired with the steward band (Shane 2026-08-23). It pinned a PRE-COMMIT
   // invitation, timed one band before the epoch so the agent was asked while marking
   // could still matter. The ask moves to fold time, where the agent has just seen the

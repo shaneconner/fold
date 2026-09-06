@@ -64,7 +64,10 @@ import {
   stringIds,
   toolPayload,
 } from "./lib/measurement.ts";
-import { emptyFoldBarMass, renderFoldBar, type FoldBarKind, type FoldBarModel } from "./lib/status-widget.ts";
+import {
+  emptyFoldBarMass, renderFoldBar, resolveFoldBarPalette,
+  type FoldBarKind, type FoldBarModel, type FoldBarPalette,
+} from "./lib/status-widget.ts";
 import type {
   NativeCompactionCompletionReceipt,
   NativeCompactionDecisionReceipt,
@@ -303,6 +306,12 @@ export function registerActiveContext(pi: any, options: {
    *  rather than a point, so it tracks a band that moves. Read only when preCommitNotice
    *  is true. */
   noticeLeadShare?: number;
+  /** THE FOLD BAR'S COLOURS (2026-09-06, Shane): which colour map the status bar shades
+   *  its five folded-to-raw categories from and where on that map the two ends of the
+   *  ramp sit. A display preference: it moves nothing about folding, and it is here only
+   *  because the settings file is handed to registration whole. Absent means Batlow end
+   *  to end. */
+  palette?: FoldBarPalette;
 }): {
   projectionCandidates: (ctx: any) => Array<Record<string, unknown>>;
 } {
@@ -320,6 +329,7 @@ export function registerActiveContext(pi: any, options: {
   let preCommitNotice = resolvedPreCommitNotice(options.preCommitNotice);
   let noticeLeadShare = resolveNoticeLeadShare(options.noticeLeadShare);
   let toolFoldThreshold = resolvedToolFoldThreshold(options.toolFoldThreshold);
+  let palette = resolveFoldBarPalette(options.palette);
   // THE RENAMED OPTION IS REFUSED BY NAME, not ignored (2026-08-30). postFoldNotice was
   // public for three days and named a carrier that no longer exists in that shape: it
   // fired on a fold count, after the cut, and asked for briefs. Silently accepting the
@@ -777,6 +787,7 @@ export function registerActiveContext(pi: any, options: {
       staleAfterCommit: input.share !== null && foldBar.staleSince !== null &&
         foldBar.staleSince === measurements.lastProviderMeasurement,
       stopped: ladder.automaticFailure?.message ?? null,
+      palette,
     };
     if (!state || !snapshot) return model;
     model.mapped = true;
@@ -928,6 +939,7 @@ export function registerActiveContext(pi: any, options: {
     const nextToolFoldThreshold = resolvedToolFoldThreshold(settings?.toolFoldThreshold);
     const nextPreCommitNotice = resolvedPreCommitNotice(settings?.preCommitNotice);
     const nextNoticeLeadShare = resolveNoticeLeadShare(settings?.noticeLeadShare);
+    const nextPalette = resolveFoldBarPalette(settings?.palette);
     const changed: string[] = [];
     for (const field of ["maxTarget", "minTarget", "consolidateAfter", "minFoldChars"] as const) {
       if (nextThresholds[field] !== thresholds[field]) changed.push(field);
@@ -935,6 +947,7 @@ export function registerActiveContext(pi: any, options: {
     if (nextToolFoldThreshold !== toolFoldThreshold) changed.push("toolFoldThreshold");
     if (nextPreCommitNotice !== preCommitNotice) changed.push("preCommitNotice");
     if (nextNoticeLeadShare !== noticeLeadShare) changed.push("noticeLeadShare");
+    if (nextPalette.map !== palette.map || nextPalette.start !== palette.start || nextPalette.end !== palette.end) changed.push("palette");
     // A SAVE THAT MOVED NOTHING IS NOT AN EVENT. The screen saves every keystroke that
     // lands, including a row stepped back to where it started.
     if (!changed.length) return;
@@ -942,6 +955,7 @@ export function registerActiveContext(pi: any, options: {
     toolFoldThreshold = nextToolFoldThreshold;
     preCommitNotice = nextPreCommitNotice;
     noticeLeadShare = nextNoticeLeadShare;
+    palette = nextPalette;
     dropDerivationMemo();
     // THE STREAM CARRIES IT, because from here on the session's commits fire at a point
     // no earlier record explains, and an archive reading this run later has no other way
@@ -955,6 +969,7 @@ export function registerActiveContext(pi: any, options: {
       tool_fold_threshold: toolFoldThreshold,
       pre_commit_notice: preCommitNotice,
       notice_lead_share: noticeLeadShare,
+      palette: { ...palette },
     });
     // The person is standing in the settings screen, so the line they will look at next
     // is the status line. Without this it keeps the old number until a context event.
