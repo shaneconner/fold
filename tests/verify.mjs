@@ -17195,8 +17195,31 @@ async function gateCommitSurfacesTellTheTruth() {
   });
   assert.equal(weighted.split("<M>]</M>").length - 1, 1, `the commit bracket off the fill is not muted: ${weighted}`);
   assert(!weighted.includes("<B>[") && !weighted.includes("<B>]"), "a guide took bold");
+  // "[" carries its stroke on the left, so the aim takes the column whose LEFT edge is
+  // the aim share; "]" carries its stroke on the right, so the commit takes the column
+  // whose RIGHT edge is the commit share (Shane 2026-09-06, fourth pass: the aim one
+  // column earlier put its stroke a whole cell left of the line it names).
   const aimColumn = context.foldBarTicks(model).entries().find(([, kind]) => kind === "aim")[0];
-  assert.equal(aimColumn, 7, "the aim at 20 percent is not the column whose right edge is 20 percent");
+  assert.equal(aimColumn, 8, "the aim at 20 percent is not the column whose left edge is 20 percent");
+  assert.equal(context.foldBarTicks(model).entries().find(([, kind]) => kind === "commit")[0], 31,
+    "the commit at 80 percent is not the column whose right edge is 80 percent");
+  // THE TRACK IS SOLID where the theme's dim ink is an RGB escape: the empty cells are one
+  // shade, the dim ink pulled toward the reference background, and a bracket on the
+  // track stands on that same shade rather than in a bare cell that read as a hole.
+  // Without an RGB dim ink the ░ texture stays.
+  assert.equal(context.trackShade({ ...plain, getFgAnsi: () => "\x1b[38;2;102;102;102m" }, true), "#353636");
+  assert.equal(context.trackShade({ ...plain, getFgAnsi: () => "\x1b[38;2;102;102;102m" }, false), "#D1D1D1");
+  assert.equal(context.trackShade(plain, true), null, "a theme without an RGB dim ink got a solid track");
+  assert(rendered.includes("░"), "the plain theme lost its ░ track");
+  const solidTrack = context.renderFoldBar(model, Number.POSITIVE_INFINITY, { ...plain, getColorMode: () => "truecolor",
+    fg: (colour, text) => (colour === "muted" ? `<M>${text}</M>` : text),
+    // A light text ink says dark theme; only the dim ink is the grey the track derives from.
+    getFgAnsi: (colour) => (colour === "dim" ? "\x1b[38;2;102;102;102m" : "\x1b[38;2;230;237;243m") });
+  assert(!solidTrack.includes("░"), `an RGB dim ink still drew the ░ track: ${solidTrack}`);
+  // The track's background escape is the foreground one rewritten, so it carries a
+  // foreground reset, exactly as the fill backgrounds do.
+  assert(solidTrack.includes("\x1b[48;2;53;54;54m\x1b[39m \x1b[49m"), `the empty track is not the one solid shade: ${solidTrack}`);
+  assert(solidTrack.includes("\x1b[48;2;53;54;54m\x1b[39m<M>]</M>\x1b[49m"), `the commit bracket on the track does not stand on the track's shade: ${solidTrack}`);
   assert.equal(context.foldBarCells(model)[2 * aimColumn + 1], "tick", "the guide does not reserve the right half");
   assert.equal(order.includes(context.foldBarCells(model)[2 * aimColumn]), true, "the guide's left half lost its fill");
   assert(rendered.endsWith("60% · commit at 80% · 3 Folds (1 Cons., 1 Span, 1 Tool, 1 Mark, 1 Pin)"), rendered);
@@ -17254,29 +17277,41 @@ async function gateCommitSurfacesTellTheTruth() {
       assert(text.includes(escape(palette[index]) + word), `the ${name} label's ${word} lost its item ink`);
     }
     assert(!text.includes("<A>"), `a truecolor theme fell back to the accent somewhere: ${text}`);
-    // The aim at .20 sits on column 7, whose left half is span (sample 14): the bracket
-    // stands on span's own background in whichever reference ink contrasts more with
-    // span, and the fill continues behind it. The commit off the fill is muted.
+    // The aim at .20 sits on column 8; the bracket stands on the background of whatever
+    // kind holds that column's left half, in that shade's own hue pulled toward the
+    // reference background, and the fill continues behind it. The commit off the fill is
+    // muted. (Shane 2026-09-06, fourth pass: black brackets were too heavy, and the
+    // candidate sheet showed no fixed accent legible over a map that runs navy to pink.)
     const dark = name === "dark";
     // The background escape is the foreground one rewritten, so it carries a foreground
     // reset before the bracket's own ink; the cell is background, reset, ink, glyph.
-    const over = (hex, glyph) => escape(hex).replace("[38;", "[48;") + "\x1b[39m" + escape(context.guideInk(hex)) + glyph;
-    assert(text.includes(over(palette[1], "[")), `the ${name} aim bracket is not the contrasting ink over span's own background: ${text}`);
-    // The clamp lifts every shade to 4.5:1 against the reference background, so the
-    // background ink is always the legible choice and the rule always lands on it.
+    const over = (hex, glyph) => escape(hex).replace("[38;", "[48;") + "\x1b[39m" + escape(context.guideInk(hex, dark)) + glyph;
+    const aimUnder = palette[order.indexOf(context.foldBarCells(model)[2 * aimColumn])];
+    assert(text.includes(over(aimUnder, "[")), `the ${name} aim bracket is not the toned ink over its own kind's background: ${text}`);
+    // The hue is kept when every clear channel ordering in the shade survives in the tone;
+    // channels within 8 units of each other (pale pink's red and blue) are a tie either way.
+    const channels = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    const hueKept = (shade, tone) => {
+      const a = channels(shade), b = channels(tone);
+      return [[0, 1], [0, 2], [1, 2]].every(([i, j]) => Math.abs(a[i] - a[j]) <= 8 || Math.sign(a[i] - a[j]) === Math.sign(b[i] - b[j]));
+    };
     for (const hex of palette) {
-      assert.equal(context.guideInk(hex), dark ? context.READABILITY.dark : context.READABILITY.light, `the ${name} bracket ink over ${hex} is not the reference background`);
-      assert(context.contrastRatio(context.guideInk(hex), hex) >= 4.5, `the bracket is not legible over ${hex}`);
+      const tone = context.guideInk(hex, dark);
+      assert(tone !== context.READABILITY.dark && tone !== context.READABILITY.light && tone !== hex.toUpperCase(),
+        `the ${name} bracket over ${hex} is black, white or the shade itself`);
+      assert(hueKept(hex, tone), `the ${name} bracket over ${hex} lost the shade's hue: ${tone}`);
+      assert(context.contrastRatio(tone, hex) >= 3, `the bracket is not legible over ${hex}: ${context.contrastRatio(tone, hex)}`);
     }
+    assert(context.GUIDE_TONE > 0.5 && context.GUIDE_TONE < 1, "the tone depth is not most of the way to the background");
     assert(!text.includes(escape(dark ? "#e6edf3" : "#1f2328") + "["), `the ${name} guide took the theme's text ink`);
-    // The commit inside the pale pink pin fill takes the DARK reference ink, which is the
-    // whole point of choosing per cell: over the light end of a map a white mark vanishes.
+    // The commit inside the pale pink pin fill is a deeper pink, legible over the light
+    // end of a map where a white mark vanishes and lighter than the black that was too heavy.
     const deep = { ...model, share: .90, aimShare: .20, commitShare: .80 };
     const commitColumn = context.foldBarTicks(deep).entries().find(([, kind]) => kind === "commit")[0];
     assert.equal(context.foldBarCells(deep)[2 * commitColumn], "pinned", "the fixture's commit point does not sit inside the pin fill");
-    assert(context.renderFoldBar(deep, 400, theme).includes(over(palette[5], "]")), `the ${name} commit bracket over pale pink is not drawn in the contrasting ink`);
-    assert.equal(context.guideInk("#FACCFA"), context.READABILITY.dark, "a bracket over raw pale pink took the light ink");
-    assert.equal(context.guideInk("#011959"), context.READABILITY.light, "a bracket over raw navy took the dark ink");
+    assert(context.renderFoldBar(deep, 400, theme).includes(over(palette[5], "]")), `the ${name} commit bracket over pale pink is not drawn in the toned ink`);
+    assert.equal(context.guideInk("#FACCFA", true), "#574C58", "a bracket over pale pink on dark is not the deeper pink");
+    assert.equal(context.guideInk("#011959", false), "#C0C6D6", "a bracket over navy on light is not the paler navy");
     for (const hex of palette) {
       assert(text.includes(escape(hex) + "█"), `the ${name} category lost its full-height ink`);
     }
@@ -17286,7 +17321,9 @@ async function gateCommitSurfacesTellTheTruth() {
     // overwrite the final two singleton colours, so test the rendered bytes as well.
     const mixed = context.renderFoldBar({ ...model, share: .10, aimShare: .10,
       mass: { consolidated: 1000, span: 1, tool: 1, marked: 1, raw: 1, pinned: 1 } }, 400, theme);
-    const bar = mixed.slice(0, mixed.indexOf(" "));
+    // The solid track's empty cells are spaces on a background, so the bar ends at the
+    // percent suffix rather than at the first space.
+    const bar = mixed.slice(0, mixed.indexOf(" 10%"));
     assert.equal(visibleWidth(bar), 40, "half-cell precision made the bar wider");
     assert(bar.includes("▌") && bar.includes("\x1b[48;2;"), "two colours were not rendered inside a column");
     for (const hex of palette) {

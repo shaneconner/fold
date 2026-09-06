@@ -191,12 +191,31 @@ export function readableOn(hex: string, dark: boolean): string {
 /** The glyph a guide draws: the band is an interval, so its floor opens a bracket and
  *  its ceiling closes one. Marks, not breaks: the fill's own colour stays behind them. */
 export const GUIDE_GLYPHS = Object.freeze({ aim: "[", commit: "]" });
-/** A guide's ink over a shade: whichever of the two reference inks contrasts more with
- *  the shade under it, near-white over the dark end of a map and near-black over the
- *  light end, so a bracket over pale pink is as legible as one over navy. Neither is a
- *  hue, so no guide competes with a category. */
-export function guideInk(under: string): string {
-  return contrastRatio(under, READABILITY.light) >= contrastRatio(under, READABILITY.dark) ? READABILITY.light : READABILITY.dark;
+/** How far a bracket's ink is pulled from the shade under it toward the reference
+ *  background. Shane 2026-09-06, fourth pass: black brackets were too heavy, and no one
+ *  fixed accent is legible over a map that runs from navy to pale pink (the theme's teal
+ *  vanished over the teal span shade, violet over the blue, white over the pink). The
+ *  fill's own hue, darkened on a dark theme and lightened on a light one, is legible over
+ *  every shade because the readability clamp holds each shade at 4.5:1 against that
+ *  background: at this depth the floor is 3:1 over the darkest shade a map can carry. */
+export const GUIDE_TONE = 0.75;
+/** A guide's ink over a shade: the same hue, most of the way to the reference
+ *  background, so a bracket over salmon is a dark salmon and one over navy a deeper navy.
+ *  Never a hue of its own, so no guide competes with a category. */
+export function guideInk(under: string, dark: boolean): string {
+  const background = hexToRgb(dark ? READABILITY.dark : READABILITY.light);
+  return rgbToHex(hexToRgb(under).map((v, i) => v * (1 - GUIDE_TONE) + background[i] * GUIDE_TONE));
+}
+/** How far the dim ink is pulled toward the reference background to stand in for the
+ *  ░ texture it replaces: a quarter-coverage glyph reads as about a quarter of its ink. */
+export const TRACK_DEPTH = 0.7;
+/** The empty track's one shade, or null when the theme's dim ink is not an RGB escape. */
+export function trackShade(theme: FoldBarTheme, dark: boolean): string | null {
+  const match = /^\x1b\[38;2;(\d+);(\d+);(\d+)m$/.exec(theme.getFgAnsi?.("dim") ?? "");
+  if (!match) return null;
+  const dim = match.slice(1, 4).map((v) => Number(v) / 255);
+  const background = hexToRgb(dark ? READABILITY.dark : READABILITY.light);
+  return rgbToHex(dim.map((v, i) => v * (1 - TRACK_DEPTH) + background[i] * TRACK_DEPTH));
 }
 
 /** The shade a map holds at a position in [0, 1], interpolated between its samples. */
@@ -249,7 +268,7 @@ export interface FoldBarTheme {
   fg(color: "dim" | "muted" | "text" | "warning" | "error" | "accent", text: string): string;
   bold(text: string): string;
   getColorMode?(): "truecolor" | "256color";
-  getFgAnsi?(color: "text" | "muted" | "accent"): string;
+  getFgAnsi?(color: "text" | "muted" | "accent" | "dim"): string;
   name?: string;
 }
 
@@ -307,11 +326,17 @@ export function foldBarCells(model: FoldBarModel, width = FOLD_BAR_WIDTH): Array
   }
   return cells;
 }
-/** The column whose RIGHT EDGE is the named share. When both guides land on one column
- *  the commit wins, since it is the one the label also names. */
+/** Each bracket's stroke sits on the share it names: "[" carries its stroke on the left,
+ *  so the aim takes the column whose LEFT edge is the aim share; "]" carries its stroke on
+ *  the right, so the commit takes the column whose RIGHT edge is the commit share. The
+ *  band lies exactly between the two strokes. When both land on one column the commit
+ *  wins, since it is the one the label also names. */
 export function foldBarTicks(model: FoldBarModel, width = FOLD_BAR_WIDTH): Map<number, "aim" | "commit"> {
-  const at = (share: number): number => Math.max(0, Math.min(width - 1, Math.round(share * width) - 1));
-  return new Map([[at(model.aimShare), "aim"], [at(model.commitShare), "commit"]]);
+  const column = (value: number): number => Math.max(0, Math.min(width - 1, value));
+  return new Map([
+    [column(Math.round(model.aimShare * width)), "aim"],
+    [column(Math.round(model.commitShare * width) - 1), "commit"],
+  ]);
 }
 export function foldBarPlainText(model: FoldBarModel): string {
   return renderFoldBar(model, Number.POSITIVE_INFINITY, { fg: (_c, t) => t, bold: (t) => t });
@@ -336,8 +361,15 @@ export function renderFoldBar(model: FoldBarModel, width: number, theme: FoldBar
   };
   const cells = foldBarCells(model);
   const ticks = foldBarTicks(model);
+  // THE TRACK IS SOLID (Shane 2026-09-06, fourth pass): a guide cell on a ░ track was a
+  // blank cell with a bracket in it, which read as a hole. With an RGB dim ink the empty
+  // track is one shade, the dim ink pulled most of the way to the reference background
+  // so it sits where ░ used to, and a bracket on it stands on that same shade. Without
+  // an RGB dim ink the ░ texture stays, and the guide cell there is bare.
+  const track = trackShade(theme, dark);
+  const trackBg = track ? truecolor(track, "").replace("[38;", "[48;") : null;
   const solid = (kind: typeof cells[number]): string => {
-    if (kind === "empty") return theme.fg("dim", "░");
+    if (kind === "empty") return trackBg ? `${trackBg} \x1b[49m` : theme.fg("dim", "░");
     if (kind === "unknown") return muted("█");
     return ink(kind as FoldBarKind, "█");
   };
@@ -356,17 +388,18 @@ export function renderFoldBar(model: FoldBarModel, width: number, theme: FoldBar
   // pass). A hairline in text ink read as a white bar; a notch cut into the fill read as
   // a boundary between two kinds of content, which a threshold is not. The band is an
   // interval, so the aim opens a bracket and the commit point closes one, each drawn
-  // over the fill's own colour in whichever reference ink contrasts more with it. No
-  // hue of its own, since a coloured guide competes with a category; never the warning
-  // ink, since folding is automatic and the person has nothing to do about it. On the
-  // bare track the muted ink stands in; without truecolor the bracket stands on the
-  // default background, because the theme's inks are the fill there.
+  // over the fill's own colour in that colour's own hue pulled toward the background.
+  // No hue of its own, since a coloured guide competes with a category; never the
+  // warning ink, since folding is automatic and the person has nothing to do about it.
+  // On the track the muted ink stands on the track's shade; without truecolor the
+  // bracket stands on the default background, because the theme's inks are the fill.
   const shadeUnder = (left: typeof cells[number]): string | null =>
     truecolorMode && (FOLD_BAR_KINDS as readonly string[]).includes(left) ? shades[left as FoldBarKind] : null;
   const guide = (column: number, left: typeof cells[number]): string => {
     const glyph = GUIDE_GLYPHS[ticks.get(column) ?? "aim"];
     const under = shadeUnder(left);
-    if (under) return `${background(left as FoldBarKind)}${truecolor(guideInk(under), glyph)}\x1b[49m`;
+    if (under) return `${background(left as FoldBarKind)}${truecolor(guideInk(under, dark), glyph)}\x1b[49m`;
+    if (left === "empty" && trackBg) return `${trackBg}${theme.fg("muted", glyph)}\x1b[49m`;
     return theme.fg("muted", glyph);
   };
   let bar = "";
@@ -382,7 +415,8 @@ export function renderFoldBar(model: FoldBarModel, width: number, theme: FoldBar
     // One full-height left-half glyph, right colour supplied by the cell background:
     // two colours in one column, never a notch, gap, score, or extra terminal column.
     if (right === "empty") {
-      bar += left === "unknown" ? muted("▌") : ink(left as FoldBarKind, "▌");
+      const half = left === "unknown" ? muted("▌") : ink(left as FoldBarKind, "▌");
+      bar += trackBg ? `${trackBg}${half}\x1b[49m` : half;
     } else {
       const bg = background(right as FoldBarKind);
       bar += bg ? `${bg}${ink(left as FoldBarKind, "▌")}\x1b[49m` : solid(left);
