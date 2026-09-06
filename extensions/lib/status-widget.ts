@@ -12,11 +12,10 @@ export type FoldBarKind = typeof FOLD_BAR_KINDS[number];
 export type FoldBarMass = Record<FoldBarKind, number>;
 export const emptyFoldBarMass = (): FoldBarMass => ({ consolidated: 0, span: 0, tool: 0, marked: 0, raw: 0, pinned: 0 });
 
-/** The five kinds that take their shade from the colour map, in map order. A pin is a
- *  person's or the model's decision rather than a stage in the pipeline, so it stays OFF
- *  the ramp and takes the theme's accent, on every colour mode. */
-export const FOLD_BAR_RAMP = ["consolidated", "span", "tool", "marked", "raw"] as const;
-export type FoldBarRampKind = typeof FOLD_BAR_RAMP[number];
+// ALL SIX KINDS TAKE THEIR SHADE FROM THE MAP, in that order (Shane 2026-09-06, second
+// pass). A pin sat off the ramp in the theme accent for one build; Shane put it back at
+// the far end, because a pin is the MOST settled state of all, decided and held, and the
+// map's last shade reads as separate from the rest of the fill on its own.
 
 // THE COLOUR MAPS, sampled at 64 positions by lab/generate_colour_maps.py: Batlow from
 // Crameri's own 256-step table, the other four from matplotlib. Five shades are read off
@@ -81,7 +80,7 @@ const COLOUR_MAPS: Record<ColourMapName, readonly string[]> = {
 /** Which map the bar reads and where on it the two ends of the ramp sit. `start` is the
  *  position of the most compressed shade and `end` the position of raw; a start above
  *  its end runs the map backwards. Both are positions in [0, 1] and may not coincide,
- *  because five shades read at one position are one shade. */
+ *  because six shades read at one position are one shade. */
 export interface FoldBarPalette { map: ColourMapName; start: number; end: number; }
 export const DEFAULT_FOLD_BAR_PALETTE: Readonly<FoldBarPalette> = Object.freeze({ map: "batlow", start: 0, end: 1 });
 
@@ -110,7 +109,7 @@ export function resolveFoldBarPalette(value: unknown): FoldBarPalette {
     }
   }
   if (start === end) {
-    throw new FoldBarPaletteError("palette.start and palette.end must differ: five shades read at one position are one shade");
+    throw new FoldBarPaletteError("palette.start and palette.end must differ: six shades read at one position are one shade");
   }
   return { map: map as ColourMapName, start: start as number, end: end as number };
 }
@@ -189,6 +188,18 @@ export function readableOn(hex: string, dark: boolean): string {
   return rgbToHex(inGamut(passes, a, b));
 }
 
+/** How far a guide cuts into the fill: the shade under it moved toward the reference
+ *  background by this share. The commit point is the one the label names, so it cuts
+ *  deeper; the aim only matters at commit time, so it cuts less. */
+export const GUIDE_DEPTH = Object.freeze({ commit: 0.55, aim: 0.35 });
+/** A guide's ink over a shade: the same hue, pulled toward the background, so the line
+ *  reads as a notch in the fill rather than a bar laid over it. */
+export function guideShade(hex: string, dark: boolean, kind: "aim" | "commit"): string {
+  const background = hexToRgb(dark ? READABILITY.dark : READABILITY.light);
+  const depth = GUIDE_DEPTH[kind];
+  return rgbToHex(hexToRgb(hex).map((v, i) => v * (1 - depth) + background[i] * depth));
+}
+
 /** The shade a map holds at a position in [0, 1], interpolated between its samples. */
 export function sampleColourMap(map: ColourMapName, position: number): string {
   const table = COLOUR_MAPS[map];
@@ -198,18 +209,18 @@ export function sampleColourMap(map: ColourMapName, position: number): string {
   return rgbToHex(a.map((v, i) => v * (1 - t) + b[i] * t));
 }
 
-const shadeMemo = new Map<string, Record<FoldBarRampKind, string>>();
-/** The five ramp shades for a palette on a background: read off the map at evenly spaced
+const shadeMemo = new Map<string, Record<FoldBarKind, string>>();
+/** The six shades for a palette on a background: read off the map at evenly spaced
  *  positions from start to end, then brought up to the readability floor. Memoized on
  *  the palette and background, since the bar renders many times per choice. */
-export function foldBarShades(palette: FoldBarPalette, dark: boolean): Record<FoldBarRampKind, string> {
+export function foldBarShades(palette: FoldBarPalette, dark: boolean): Record<FoldBarKind, string> {
   const key = `${palette.map}:${palette.start}:${palette.end}:${dark ? "dark" : "light"}`;
   const held = shadeMemo.get(key);
   if (held) return held;
-  const shades = Object.fromEntries(FOLD_BAR_RAMP.map((kind, i) => {
-    const position = palette.start + (palette.end - palette.start) * (i / (FOLD_BAR_RAMP.length - 1));
+  const shades = Object.fromEntries(FOLD_BAR_KINDS.map((kind, i) => {
+    const position = palette.start + (palette.end - palette.start) * (i / (FOLD_BAR_KINDS.length - 1));
     return [kind, readableOn(sampleColourMap(palette.map, position), dark)];
-  })) as Record<FoldBarRampKind, string>;
+  })) as Record<FoldBarKind, string>;
   shadeMemo.set(key, shades);
   return shades;
 }
@@ -316,11 +327,13 @@ export function renderFoldBar(model: FoldBarModel, width: number, theme: FoldBar
     (model.share === null ? "" : neutral(` · ${Math.round(model.share * 100)}% full`)));
   if (model.share === null) return cut(`${brand} ${muted(`not measured yet · folds automatically at ${Math.round(model.commitShare * 100)}%`)}`);
   const truecolorMode = theme.getColorMode?.() === "truecolor";
-  const shades = foldBarShades(model.palette ?? DEFAULT_FOLD_BAR_PALETTE, !lightBackground(theme));
+  const dark = !lightBackground(theme);
+  const shades = foldBarShades(model.palette ?? DEFAULT_FOLD_BAR_PALETTE, dark);
+  // Without truecolor the theme's own inks stand in: pinned takes the accent, raw the
+  // muted ink, everything compressed or marked the text ink.
   const ink = (kind: FoldBarKind, text: string): string => {
-    if (kind === "pinned") return theme.fg("accent", text);
     if (truecolorMode) return truecolor(shades[kind], text);
-    return theme.fg(kind === "raw" ? "muted" : "text", text);
+    return theme.fg(kind === "pinned" ? "accent" : kind === "raw" ? "muted" : "text", text);
   };
   const cells = foldBarCells(model);
   const ticks = foldBarTicks(model);
@@ -330,8 +343,8 @@ export function renderFoldBar(model: FoldBarModel, width: number, theme: FoldBar
     return ink(kind as FoldBarKind, "█");
   };
   const background = (kind: FoldBarKind | "unknown"): string | null => {
-    if (truecolorMode && kind !== "pinned" && kind !== "unknown") return truecolor(shades[kind], "").replace("[38;", "[48;");
-    // Pi exposes the same theme ink in 256-colour mode, and the accent on every mode.
+    if (truecolorMode && kind !== "unknown") return truecolor(shades[kind], "").replace("[38;", "[48;");
+    // Pi exposes the same theme ink in 256-colour mode, and the accent for a pin there.
     // Convert its foreground escape to background, without assuming an RGB theme or
     // leaking styles into the label.
     const fg = theme.getFgAnsi?.(kind === "pinned" ? "accent" : kind === "raw" || kind === "unknown" ? "muted" : "text") ?? "";
@@ -340,13 +353,21 @@ export function renderFoldBar(model: FoldBarModel, width: number, theme: FoldBar
     const basic = /^\x1b\[(3[0-7]|9[0-7])m$/.exec(fg);
     return basic ? `\x1b[${Number(basic[1]) + 10}m` : null;
   };
-  // THE GUIDES ARE HAIRLINES, WEIGHTED, NEVER COLOURED (Shane 2026-09-06). The commit
-  // point is the one the label names, so it is drawn in text ink and bold; the aim only
-  // matters at commit time, so it is dim. Neither takes a palette shade, since a coloured
-  // guide competes with a category, and neither takes the warning ink, since folding is
-  // automatic and the person has nothing to do about it.
-  const guide = (column: number): string =>
-    ticks.get(column) === "commit" ? neutral(theme.bold("▕")) : theme.fg("dim", "▕");
+  // THE GUIDES ARE NOTCHES, NOT BARS (Shane 2026-09-06, second pass). Text ink over
+  // pink read as a white bar and drew the eye from the fill it was meant to annotate.
+  // Over the fill a guide takes the shade under it, pulled toward the background: the
+  // commit point deeper than the aim, so weight still tells them apart. Neither takes
+  // its own hue, since a coloured guide competes with a category, and neither takes
+  // the warning ink, since folding is automatic and the person has nothing to do about
+  // it. On the bare track, or where no RGB shade is known, muted and dim ink stand in.
+  const shadeUnder = (left: typeof cells[number]): string | null =>
+    truecolorMode && (FOLD_BAR_KINDS as readonly string[]).includes(left) ? shades[left as FoldBarKind] : null;
+  const guide = (column: number, left: typeof cells[number]): string => {
+    const kind = ticks.get(column) ?? "aim";
+    const under = shadeUnder(left);
+    if (under) return truecolor(guideShade(under, dark, kind), "▕");
+    return theme.fg(kind === "commit" ? "muted" : "dim", "▕");
+  };
   let bar = "";
   for (let i = 0; i < cells.length; i += 2) {
     const left = cells[i], right = cells[i + 1];
@@ -354,7 +375,7 @@ export function renderFoldBar(model: FoldBarModel, width: number, theme: FoldBar
       // The right-eighth hairline over the left half's own colour: the guide sits at the
       // exact share it names and hides no fill. Off the fill it stands on the bare track.
       const bg = left === "empty" ? null : background(left as FoldBarKind | "unknown");
-      bar += bg ? `${bg}${guide(i / 2)}\x1b[49m` : guide(i / 2);
+      bar += bg ? `${bg}${guide(i / 2, left)}\x1b[49m` : guide(i / 2, left);
       continue;
     }
     if (left === right) { bar += solid(left); continue; }

@@ -17137,8 +17137,8 @@ async function gateCommitSurfacesTellTheTruth() {
   assert(/0 Pin/.test(fresh), `pins were counted with nothing pinned: ${fresh}`);
 
   // WHAT IS HELD IS NAMED AND DRAWN (Shane 2026-09-04): pin the newest turn's entries
-  // through the real tool and the row gains a pinned clause and pinned cells; the cells
-  // take the accent ink, the one class off the colour map, on every colour mode.
+  // through the real tool and the row gains a pinned clause and pinned cells; without
+  // truecolor the cells take the accent ink, the theme's stand-in for the map's last shade.
   const newest = runtime.built.turnEntries.at(-1);
   await toolCall(runtime, { action: "pin", ids: [newest[0], newest.at(-1)] });
   await project(runtime);
@@ -17176,17 +17176,23 @@ async function gateCommitSurfacesTellTheTruth() {
   assert(!rendered.includes("\n") && !/usage|items|sections|tokens|nested|hide/.test(rendered));
   assert(!/[▁▂▃▄▅▆▇▖▉▊]/.test(rendered) && !rendered.includes("[") && !rendered.includes("]"),
     "the removed heights, scores, or brackets returned");
-  // THE GUIDES ARE HAIRLINES, WEIGHTED, NEVER COLOURED (Shane 2026-09-06): the commit
-  // point in bold text ink, the aim dim, both the right-eighth glyph at the column whose
-  // right edge is the share they name, neither dashed and neither a palette shade.
+  // THE GUIDES ARE NOTCHES, NOT BARS (Shane 2026-09-06, second pass: text ink over pink
+  // read as a white bar). Both are the right-eighth glyph at the column whose right edge
+  // is the share they name, neither dashed. Over the fill each takes the shade under it
+  // pulled toward the background, the commit deeper than the aim (asserted in the
+  // truecolor block below); without an RGB shade the commit is muted and the aim dim,
+  // never text, never bold, never a warning, never a palette shade of its own.
   assert.equal(rendered.split("▕").length - 1, 2, "both guides must be drawn, as hairlines");
   assert(!rendered.includes("┆"), "the dashed full-column guide returned");
   const weighted = context.renderFoldBar(model, Number.POSITIVE_INFINITY, {
-    fg: (colour, text) => (colour === "dim" ? `<D>${text}</D>` : colour === "text" ? `<T>${text}</T>` : text),
+    fg: (colour, text) => (colour === "dim" ? `<D>${text}</D>` : colour === "muted" ? `<M>${text}</M>` : colour === "text" ? `<T>${text}</T>` : text),
     bold: (text) => `<B>${text}</B>`,
   });
-  assert.equal(weighted.split("<T><B>▕</B></T>").length - 1, 1, `the commit guide is not the bold text hairline: ${weighted}`);
+  assert.equal(weighted.split("<M>▕</M>").length - 1, 1, `the commit guide is not the muted hairline: ${weighted}`);
   assert.equal(weighted.split("<D>▕</D>").length - 1, 1, `the aim guide is not the dim hairline: ${weighted}`);
+  assert(!weighted.includes("<T>▕") && !weighted.includes("<B>▕"), "a guide took text ink or bold");
+  assert(context.GUIDE_DEPTH.commit > context.GUIDE_DEPTH.aim && context.GUIDE_DEPTH.aim > 0 && context.GUIDE_DEPTH.commit < 1,
+    "the commit notch is not deeper than the aim notch");
   const aimColumn = context.foldBarTicks(model).entries().find(([, kind]) => kind === "aim")[0];
   assert.equal(aimColumn, 7, "the aim at 20 percent is not the column whose right edge is 20 percent");
   assert.equal(context.foldBarCells(model)[2 * aimColumn + 1], "tick", "the guide does not reserve the right half");
@@ -17224,14 +17230,14 @@ async function gateCommitSurfacesTellTheTruth() {
     assert(!line.includes("\n") && visibleWidth(line) <= width, `row overruns terminal width ${width}: ${line}`);
   }
 
-  // Body and label ink must agree, including pins and pending consolidations. The five
-  // ramp shades are the default palette's own, read through the runtime's shade function
-  // (gate 171 owns what that function promises); the pin is the accent, off the ramp.
-  const rampOrder = ["consolidated", "span", "tool", "marked", "raw"];
-  assert.deepEqual([...context.FOLD_BAR_RAMP], rampOrder);
+  // Body and label ink must agree, including pins and pending consolidations. All six
+  // shades are the default palette's own, read through the runtime's shade function
+  // (gate 171 owns what that function promises); the pin is the map's LAST shade (Shane
+  // 2026-09-06, second pass: it sat in the accent for one build and came back onto the
+  // map at the far end, the most settled state at the end of the ramp).
   const colours = {
-    dark: rampOrder.map((kind) => context.foldBarShades(context.DEFAULT_FOLD_BAR_PALETTE, true)[kind]),
-    light: rampOrder.map((kind) => context.foldBarShades(context.DEFAULT_FOLD_BAR_PALETTE, false)[kind]),
+    dark: order.map((kind) => context.foldBarShades(context.DEFAULT_FOLD_BAR_PALETTE, true)[kind]),
+    light: order.map((kind) => context.foldBarShades(context.DEFAULT_FOLD_BAR_PALETTE, false)[kind]),
   };
   const escape = (hex) => `\x1b[38;2;${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(";")}m`;
   const luminance = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
@@ -17242,11 +17248,18 @@ async function gateCommitSurfacesTellTheTruth() {
       fg: (colour, text) => (colour === "accent" ? `<A>${text}</A>` : text),
       getFgAnsi: () => escape(name === "dark" ? "#e6edf3" : "#1f2328") };
     const text = context.renderFoldBar(model, 400, theme);
-    for (const [word, index] of [["1 Cons.", 0], ["1 Span", 1], ["1 Tool", 2], ["1 Mark", 3]]) {
+    for (const [word, index] of [["1 Cons.", 0], ["1 Span", 1], ["1 Tool", 2], ["1 Mark", 3], ["1 Pin", 5]]) {
       assert(text.includes(escape(palette[index]) + word), `the ${name} label's ${word} lost its item ink`);
     }
-    assert(text.includes("<A>1 Pin</A>") && text.includes("<A>█</A>"),
-      `the ${name} pin is not the accent in body and label on a truecolor theme: ${text}`);
+    assert(!text.includes("<A>"), `a truecolor theme fell back to the accent somewhere: ${text}`);
+    // The aim at .20 sits on column 7, whose left half is span (sample 14); its notch is
+    // span's own shade pulled toward the background, and the commit off the fill is muted.
+    const dark = name === "dark";
+    const notch = context.guideShade(palette[1], dark, "aim");
+    assert(text.includes(escape(notch) + "▕"), `the ${name} aim notch is not span's shade cut toward the background: ${text}`);
+    assert(context.contrastRatio(notch, palette[1]) > 1.3 && context.contrastRatio(notch, palette[1]) < context.contrastRatio(context.guideShade(palette[1], dark, "commit"), palette[1]),
+      "the notch is invisible against its fill, or the commit cuts no deeper than the aim");
+    assert(!text.includes(escape(dark ? "#e6edf3" : "#1f2328") + "▕"), `the ${name} guide took the theme's text ink`);
     for (const hex of palette) {
       assert(text.includes(escape(hex) + "█"), `the ${name} category lost its full-height ink`);
     }
@@ -17464,9 +17477,10 @@ async function gateFoldBarRestoresWithoutAContextEvent() {
  * 2026-09-06).
  *
  * Shane questioned whether Batlow end to end was the right map and concluded a person
- * should choose and explore. The bar now reads its five folded-to-raw shades off a named
- * colour map between a start and an end position, the pin sits off the ramp in the theme
- * accent, and three rows on /fold-settings drive it with the status line as the preview.
+ * should choose and explore. The bar now reads its six shades, consolidated through
+ * pinned, off a named colour map between a start and an end position, and three rows on
+ * /fold-settings drive it with the status line as the preview. (The pin sat off the ramp
+ * in the theme accent for one build; Shane put it back at the far end the same day.)
  *
  * What this gate pins, in order:
  *   - ONE RESOLVER for every path a palette arrives by: absent means Batlow end to end;
@@ -17504,7 +17518,7 @@ async function gateFoldBarPaletteIsAReadableChoice() {
   assert.equal(context.sampleColourMap("viridis", 0), "#440154");
   assert.notEqual(context.sampleColourMap("batlow", 0.5), context.sampleColourMap("batlow", 0.51));
 
-  const ramp = [...context.FOLD_BAR_RAMP];
+  const ramp = [...context.FOLD_BAR_KINDS];
   const ranges = [[0, 1], [1, 0], [0.15, 1], [0, 0.5], [0.4, 0.6], [0.95, 0.05]];
   let clamped = 0, untouched = 0;
   for (const map of context.COLOUR_MAP_NAMES) {
@@ -17536,9 +17550,9 @@ async function gateFoldBarPaletteIsAReadableChoice() {
   // A reversed range is the same ramp read the other way.
   const forward = context.foldBarShades({ map: "batlow", start: 0, end: 1 }, true);
   const backward = context.foldBarShades({ map: "batlow", start: 1, end: 0 }, true);
-  assert.equal(backward.consolidated, forward.raw);
-  assert.equal(backward.raw, forward.consolidated);
-  assert.equal(backward.tool, forward.tool);
+  assert.equal(backward.consolidated, forward.pinned);
+  assert.equal(backward.pinned, forward.consolidated);
+  assert.equal(backward.tool, forward.marked);
 
   // THE FILE. Whole, through the one resolver, and only written when set.
   const scratch = await mkdtemp(join(tmpdir(), "fold-palette-"));
@@ -17593,7 +17607,7 @@ async function gateFoldBarPaletteIsAReadableChoice() {
     runtime.ctx.ui.custom = async (factory) => { screen = factory({}, { fg: (_r, t) => t, bold: (t) => t }, {}, () => {}); };
     await runtime.commands.get("fold-settings").handler("", runtime.ctx);
     const rows = () => screen.render(160).join("\n");
-    assert(/Bar colours\s+magma/.test(rows()) && /Folded shade at\s+20% along the map/.test(rows()) && /Raw shade at\s+90% along the map/.test(rows()),
+    assert(/Bar colours\s+magma/.test(rows()) && /Folded shade at\s+20% along the map/.test(rows()) && /Pinned shade at\s+90% along the map/.test(rows()),
       `the rows do not state the file's palette: ${rows()}`);
     for (let i = 0; i < 7; i += 1) screen.handleInput("\x1b[B");
     const before = runtime.appended.length;
@@ -17605,23 +17619,23 @@ async function gateFoldBarPaletteIsAReadableChoice() {
     assert.equal(events.length, 1, `one step wrote ${events.length} settings events`);
     assert.deepEqual(events[0].changed, ["palette"]);
     assert.deepEqual(events[0].palette, { map: "cividis", start: 0.2, end: 0.9 });
-    const shade = context.foldBarShades({ map: "cividis", start: 0.2, end: 0.9 }, true).raw;
+    const shade = context.foldBarShades({ map: "cividis", start: 0.2, end: 0.9 }, true).pinned;
     assert(widget.render(400).join("\n").includes(escape(shade)), "the bar did not repaint in the chosen map");
     // The map row clamps at the list's end rather than wrapping or refusing loudly.
     screen.handleInput("\x1b[C");
     assert.equal(widget.model.palette.map, "cividis");
-    // The raw end is at 0.9; stepping the folded end up from 0.2 lands on 0.85 then
+    // The pinned end is at 0.9; stepping the folded end up from 0.2 lands on 0.85 then
     // SKIPS 0.9 for 0.95, because coincident ends are not on the lattice.
     screen.handleInput("\x1b[B");
     for (let i = 0; i < 13; i += 1) screen.handleInput("\x1b[C");
     assert.equal(widget.model.palette.start, 0.85);
     screen.handleInput("\x1b[C");
-    assert.equal(widget.model.palette.start, 0.95, "the folded end stepped onto the raw end");
+    assert.equal(widget.model.palette.start, 0.95, "the folded end stepped onto the pinned end");
     assert(/Folded shade at\s+95% along the map/.test(rows()), rows());
     screen.handleInput("\x1b[B");
     for (let i = 0; i < 2; i += 1) screen.handleInput("\x1b[C");
     assert.equal(widget.model.palette.end, 1);
-    assert(/Raw shade at\s+end of the map/.test(rows()), rows());
+    assert(/Pinned shade at\s+end of the map/.test(rows()), rows());
     // A refused push leaves the palette where it was, like every other live setting.
     assert.throws(() => context.applyLiveSettings(runtime.pi, { palette: { map: "batlow", start: 0.5, end: 0.5 } }), /must differ/);
     assert.deepEqual(widget.model.palette, { map: "cividis", start: 0.95, end: 1 });

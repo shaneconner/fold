@@ -339,9 +339,9 @@ const EDITOR_ROWS: readonly EditorRow[] = [
 	// THE BAR'S COLOURS ARE A CHOICE (Shane 2026-09-06). Three rows over one stored object:
 	// which map, and where on it the two ends of the ramp sit. The status line repaints on
 	// every step, so the bar itself is the preview.
-	{ id: "paletteMap", label: "Bar colours", description: "The colour map the status bar shades folded-to-raw content from. Pinned content always takes the theme accent (palette.map)" },
-	{ id: "paletteStart", label: "Folded shade at", description: "Where on that map the most compressed content sits. Put it past the raw end to run the map backwards (palette.start)" },
-	{ id: "paletteEnd", label: "Raw shade at", description: "Where on that map raw content sits. The three shades between are spaced evenly (palette.end)" },
+	{ id: "paletteMap", label: "Bar colours", description: "The colour map the status bar reads its six shades from, most compressed first and pinned last (palette.map)" },
+	{ id: "paletteStart", label: "Folded shade at", description: "Where on that map the most compressed content sits. Put it past the pinned end to run the map backwards (palette.start)" },
+	{ id: "paletteEnd", label: "Pinned shade at", description: "Where on that map pinned content sits, with raw just before it. The shades between are spaced evenly (palette.end)" },
 ];
 
 // The cycle lattice for both shares. Shares step in cents so no float drift reaches a
