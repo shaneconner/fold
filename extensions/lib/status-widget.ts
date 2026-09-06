@@ -188,16 +188,17 @@ export function readableOn(hex: string, dark: boolean): string {
   return rgbToHex(inGamut(passes, a, b));
 }
 
-/** The glyph a guide draws: the band is an interval, so its floor is a stroke on the
- *  LEFT edge of its cell and its ceiling a stroke on the RIGHT edge. Marks, not breaks:
- *  the fill's own colour stays behind them. EDGE STROKES, NOT BRACKETS (Shane 2026-09-06,
- *  fifth pass, from a zoomed screenshot of the bracket build): a font insets a bracket's
- *  stroke from the cell edge, three pixels into a ten-pixel cell on his pane, so "["
- *  named 13 percent when the line was at 10 and "]" 21 when the line was at 25. The
- *  eighth blocks are drawn flush to the cell edge by definition. The earlier hairline
- *  that read "too pronounced" was this glyph in TEXT ink; the ink is now the fill's own
- *  hue toned toward the background, muted on the track. */
-export const GUIDE_GLYPHS = Object.freeze({ aim: "▏", commit: "▕" });
+/** The glyph a guide draws. Marks, not breaks: the fill's own colour stays behind them.
+ *  DOTTED, NOT A LINE (Shane 2026-09-06, sixth pass): a full-height one-pixel stroke
+ *  inside a solid colour is exactly what the boundary between two folds of that colour
+ *  looks like, so the edge strokes "read as fold segments"; a mark that does not span
+ *  the cell's height cannot be a boundary. The dotted vertical is centred in its cell,
+ *  so each guide stands just inside the band's edge: the aim in the cell whose left edge
+ *  is the aim share, the commit in the cell whose right edge is the commit share, a
+ *  quarter cell in from each line. Earlier passes: a text-ink hairline "too pronounced",
+ *  a notch "confusing", brackets off their lines because a font insets them. The ink is
+ *  the fill's own hue toned toward the background, muted on the track. */
+export const GUIDE_GLYPHS = Object.freeze({ aim: "┊", commit: "┊" });
 /** How far a bracket's ink is pulled from the shade under it toward the reference
  *  background. Shane 2026-09-06, fourth pass: black brackets were too heavy, and no one
  *  fixed accent is legible over a map that runs from navy to pale pink (the theme's teal
@@ -333,11 +334,10 @@ export function foldBarCells(model: FoldBarModel, width = FOLD_BAR_WIDTH): Array
   }
   return cells;
 }
-/** Each guide's stroke sits on the share it names: ▏ carries its stroke on the left, so
- *  the aim takes the column whose LEFT edge is the aim share; ▕ carries its stroke on the
- *  right, so the commit takes the column whose RIGHT edge is the commit share. The band
- *  lies exactly between the two strokes. When both land on one column the commit wins,
- *  since it is the one the label also names. */
+/** Each guide stands in the band's own edge cell: the aim in the column whose LEFT edge
+ *  is the aim share, the commit in the column whose RIGHT edge is the commit share, so
+ *  the band is the run of cells from one mark to the other inclusive. When both land on
+ *  one column the commit wins, since it is the one the label also names. */
 export function foldBarTicks(model: FoldBarModel, width = FOLD_BAR_WIDTH): Map<number, "aim" | "commit"> {
   const column = (value: number): number => Math.max(0, Math.min(width - 1, value));
   return new Map([
@@ -394,12 +394,11 @@ export function renderFoldBar(model: FoldBarModel, width: number, theme: FoldBar
   // THE GUIDES ARE MARKS ON THE AXIS, NOT BREAKS IN THE FILL (Shane 2026-09-06, third
   // pass). A hairline in text ink read as a white bar; a notch cut into the fill read as
   // a boundary between two kinds of content, which a threshold is not. The band is an
-  // interval, so the aim opens it with a stroke on its cell's left edge and the commit
-  // point closes it with one on its cell's right edge, each drawn over the fill's own
-  // colour in that colour's own hue pulled toward the background. No hue of its own,
-  // since a coloured guide competes with a category; never the warning ink, since
+  // interval, so a dotted mark stands in each of its edge cells, drawn over the fill's
+  // own colour in that colour's own hue pulled toward the background. No hue of its
+  // own, since a coloured guide competes with a category; never the warning ink, since
   // folding is automatic and the person has nothing to do about it. On the track the
-  // muted ink stands on the track's shade; without truecolor the stroke stands on the
+  // muted ink stands on the track's shade; without truecolor the mark stands on the
   // default background, because the theme's inks are the fill.
   const shadeUnder = (left: typeof cells[number]): string | null =>
     truecolorMode && (FOLD_BAR_KINDS as readonly string[]).includes(left) ? shades[left as FoldBarKind] : null;
@@ -414,8 +413,8 @@ export function renderFoldBar(model: FoldBarModel, width: number, theme: FoldBar
   for (let i = 0; i < cells.length; i += 2) {
     const left = cells[i], right = cells[i + 1];
     if (right === "tick") {
-      // The stroke over the left half's own colour: the guide sits at the exact share
-      // it names and hides no fill. Off the fill it stands on the track.
+      // The mark over the left half's own colour: the guide stands in the band's edge
+      // cell and hides no fill. Off the fill it stands on the track.
       bar += guide(i / 2, left);
       continue;
     }
