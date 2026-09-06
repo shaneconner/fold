@@ -439,13 +439,17 @@ export function renderFoldBar(model: FoldBarModel, width: number, theme: FoldBar
   }
   if (model.mapped) {
     // N counts compressed folds. Mark/Pin are accompanying states, not added to N, and
-    // they are named in the bar's own order.
-    const counts = [
-      ink("consolidated", `${model.foldConsolidations} Cons.`), ink("span", `${model.foldSpans} Span`),
-      ink("tool", `${model.foldTruncations} Tool`), ink("marked", `${model.stagedMarks} Mark`),
-      ink("pinned", `${model.pinnedRefs} Pin`),
-    ];
-    parts.push(neutral(`${model.folds} Folds (`) + counts.join(muted(", ")) + neutral(")"));
+    // they are named in the bar's own order. A kind with nothing to count is not named
+    // (Shane 2026-09-06): the row's width is the scarce thing, and "0 Tool" tells a
+    // person nothing the bar does not already show by its absence.
+    const counts = ([
+      ["consolidated", model.foldConsolidations, "Cons."], ["span", model.foldSpans, "Span"],
+      ["tool", model.foldTruncations, "Tool"], ["marked", model.stagedMarks, "Mark"],
+      ["pinned", model.pinnedRefs, "Pin"],
+    ] as const).filter(([, count]) => count > 0).map(([kind, count, word]) => ink(kind, `${count} ${word}`));
+    parts.push(counts.length
+      ? neutral(`${model.folds} Folds (`) + counts.join(muted(", ")) + neutral(")")
+      : neutral(`${model.folds} Folds`));
     if (model.unplacedItems > 0) parts.push(muted(`${model.unplacedItems} not mapped`));
   } else parts.push(muted("mapping"));
   return cut(`${bar} ${parts.join(theme.fg("dim", " · "))}`);

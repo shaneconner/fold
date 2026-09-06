@@ -17101,8 +17101,17 @@ async function gateCommitSurfacesTellTheTruth() {
     `the over-band reading alarms or is missing: ${overBand}`);
   const staged = /(\d+) Mark/.exec(before);
   assert(staged && Number(staged[1]) > 0, `the fixture staged nothing for /fold to commit: ${before}`);
-  assert(/\d+ Folds \(\d+ Cons\., \d+ Span, \d+ Tool, \d+ Mark, \d+ Pin\)/.test(before) && !/tokens|nested|to free/.test(before),
+  // A KIND WITH NOTHING TO COUNT IS NOT NAMED (Shane 2026-09-06): the inventory lists
+  // only the nonzero kinds, in the bar's order, and never a "0 Tool" or "0 Pin".
+  assert(/\d+ Folds \((\d+ (Cons\.|Span|Tool|Mark|Pin)(, )?)+\)/.test(before) && !/tokens|nested|to free/.test(before),
     `the compact inventory lost its requested format: ${before}`);
+  assert(!/\b0 (Cons\.|Span|Tool|Mark|Pin)\b/.test(before), `a kind with nothing to count was named: ${before}`);
+  {
+    const inventoryWords = [...before.matchAll(/\d+ (Cons\.|Span|Tool|Mark|Pin)/g)].map((m) => m[1]);
+    const barOrder = ["Cons.", "Span", "Tool", "Mark", "Pin"];
+    assert.deepEqual(inventoryWords, barOrder.filter((word) => inventoryWords.includes(word)),
+      `the inventory left the bar's order: ${before}`);
+  }
   assert.equal(widget.render(200).length, 1, "the removed second row returned");
 
   const from = runtime.appended.length;
@@ -17134,7 +17143,7 @@ async function gateCommitSurfacesTellTheTruth() {
   const fresh = row();
   assert(!/before the commit/.test(fresh), `a new count did not clear the stale marker: ${fresh}`);
   assert(/\b10% · commit at 80%/.test(fresh), `the fresh count did not render as a live reading: ${fresh}`);
-  assert(/0 Pin/.test(fresh), `pins were counted with nothing pinned: ${fresh}`);
+  assert(!/\bPin\b/.test(fresh) && widget.model.pinnedRefs === 0, `nothing is pinned yet the row names a pin count: ${fresh}`);
 
   // WHAT IS HELD IS NAMED AND DRAWN (Shane 2026-09-04): pin the newest turn's entries
   // through the real tool and the row gains a pinned clause and pinned cells; without
@@ -17430,7 +17439,8 @@ async function gateFoldCompositionCountsVisibleMass() {
   assert.equal(model.folds, 6, "fold count came from edges or pending marks");
   assert.equal(model.unplacedItems, 0, "a properly reconstructed custom entry failed to map");
   const text = widget.render(600).join("\n");
-  assert(text.includes("6 Folds (0 Cons., 6 Span, 0 Tool, 1 Mark, 0 Pin)"));
+  assert(text.includes("6 Folds (6 Span, 1 Mark)"), `zero kinds were named or the counts moved: ${text}`);
+  assert(!/0 (Cons\.|Tool|Pin)/.test(text), `a kind with nothing to count was named: ${text}`);
   const stateBefore = materialized(runtime);
   await project(runtime);
   await settle();
@@ -17677,7 +17687,9 @@ async function gateFoldBarPaletteIsAReadableChoice() {
     assert.equal(events.length, 1, `one step wrote ${events.length} settings events`);
     assert.deepEqual(events[0].changed, ["palette"]);
     assert.deepEqual(events[0].palette, { map: "cividis", start: 0.2, end: 0.9 });
-    const shade = context.foldBarShades({ map: "cividis", start: 0.2, end: 0.9 }, true).pinned;
+    // Read the repaint off the raw fill, which every measured bar carries; the pinned
+    // shade reached the row only through a "0 Pin" label the inventory no longer names.
+    const shade = context.foldBarShades({ map: "cividis", start: 0.2, end: 0.9 }, true).raw;
     assert(widget.render(400).join("\n").includes(escape(shade)), "the bar did not repaint in the chosen map");
     // The map row clamps at the list's end rather than wrapping or refusing loudly.
     screen.handleInput("\x1b[C");
