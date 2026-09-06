@@ -17184,19 +17184,22 @@ async function gateCommitSurfacesTellTheTruth() {
   // below, over navy and over pale pink). On the bare track the muted ink stands in;
   // never bold, never a warning, never a palette shade of its own, never a hairline or
   // a notch, since both of those were tried and rejected on a real terminal.
-  assert.equal(rendered.split("[").length - 1, 1, "the aim bracket must be drawn exactly once");
-  assert.equal(rendered.split("]").length - 1, 1, "the commit bracket must be drawn exactly once");
-  assert(rendered.indexOf("[") < rendered.indexOf("]"), "the aim bracket must open before the commit bracket closes");
-  assert(!rendered.includes("▕") && !rendered.includes("┆"), "a hairline or dashed guide returned");
-  assert.deepEqual(context.GUIDE_GLYPHS, { aim: "[", commit: "]" });
+  // EDGE STROKES (Shane 2026-09-06, fifth pass): a font insets a bracket's stroke from
+  // the cell edge (three pixels into a ten-pixel cell on his pane), so brackets named
+  // shares three percent off the lines; the eighth blocks sit flush to the edge.
+  assert.equal(rendered.split("▏").length - 1, 1, "the aim stroke must be drawn exactly once");
+  assert.equal(rendered.split("▕").length - 1, 1, "the commit stroke must be drawn exactly once");
+  assert(rendered.indexOf("▏") < rendered.indexOf("▕"), "the aim stroke must open before the commit stroke closes");
+  assert(!rendered.includes("[") && !rendered.includes("]") && !rendered.includes("┆"), "a bracket or dashed guide returned");
+  assert.deepEqual(context.GUIDE_GLYPHS, { aim: "▏", commit: "▕" });
   const weighted = context.renderFoldBar(model, Number.POSITIVE_INFINITY, {
     fg: (colour, text) => (colour === "dim" ? `<D>${text}</D>` : colour === "muted" ? `<M>${text}</M>` : colour === "text" ? `<T>${text}</T>` : text),
     bold: (text) => `<B>${text}</B>`,
   });
-  assert.equal(weighted.split("<M>]</M>").length - 1, 1, `the commit bracket off the fill is not muted: ${weighted}`);
-  assert(!weighted.includes("<B>[") && !weighted.includes("<B>]"), "a guide took bold");
-  // "[" carries its stroke on the left, so the aim takes the column whose LEFT edge is
-  // the aim share; "]" carries its stroke on the right, so the commit takes the column
+  assert.equal(weighted.split("<M>▕</M>").length - 1, 1, `the commit stroke off the fill is not muted: ${weighted}`);
+  assert(!weighted.includes("<B>▏") && !weighted.includes("<B>▕"), "a guide took bold");
+  // ▏ carries its stroke on the left, so the aim takes the column whose LEFT edge is
+  // the aim share; ▕ carries its stroke on the right, so the commit takes the column
   // whose RIGHT edge is the commit share (Shane 2026-09-06, fourth pass: the aim one
   // column earlier put its stroke a whole cell left of the line it names).
   const aimColumn = context.foldBarTicks(model).entries().find(([, kind]) => kind === "aim")[0];
@@ -17219,7 +17222,7 @@ async function gateCommitSurfacesTellTheTruth() {
   // The track's background escape is the foreground one rewritten, so it carries a
   // foreground reset, exactly as the fill backgrounds do.
   assert(solidTrack.includes("\x1b[48;2;53;54;54m\x1b[39m \x1b[49m"), `the empty track is not the one solid shade: ${solidTrack}`);
-  assert(solidTrack.includes("\x1b[48;2;53;54;54m\x1b[39m<M>]</M>\x1b[49m"), `the commit bracket on the track does not stand on the track's shade: ${solidTrack}`);
+  assert(solidTrack.includes("\x1b[48;2;53;54;54m\x1b[39m<M>▕</M>\x1b[49m"), `the commit stroke on the track does not stand on the track's shade: ${solidTrack}`);
   assert.equal(context.foldBarCells(model)[2 * aimColumn + 1], "tick", "the guide does not reserve the right half");
   assert.equal(order.includes(context.foldBarCells(model)[2 * aimColumn]), true, "the guide's left half lost its fill");
   assert(rendered.endsWith("60% · commit at 80% · 3 Folds (1 Cons., 1 Span, 1 Tool, 1 Mark, 1 Pin)"), rendered);
@@ -17287,7 +17290,7 @@ async function gateCommitSurfacesTellTheTruth() {
     // reset before the bracket's own ink; the cell is background, reset, ink, glyph.
     const over = (hex, glyph) => escape(hex).replace("[38;", "[48;") + "\x1b[39m" + escape(context.guideInk(hex, dark)) + glyph;
     const aimUnder = palette[order.indexOf(context.foldBarCells(model)[2 * aimColumn])];
-    assert(text.includes(over(aimUnder, "[")), `the ${name} aim bracket is not the toned ink over its own kind's background: ${text}`);
+    assert(text.includes(over(aimUnder, "▏")), `the ${name} aim stroke is not the toned ink over its own kind's background: ${text}`);
     // The hue is kept when every clear channel ordering in the shade survives in the tone;
     // channels within 8 units of each other (pale pink's red and blue) are a tie either way.
     const channels = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
@@ -17303,13 +17306,13 @@ async function gateCommitSurfacesTellTheTruth() {
       assert(context.contrastRatio(tone, hex) >= 3, `the bracket is not legible over ${hex}: ${context.contrastRatio(tone, hex)}`);
     }
     assert(context.GUIDE_TONE > 0.5 && context.GUIDE_TONE < 1, "the tone depth is not most of the way to the background");
-    assert(!text.includes(escape(dark ? "#e6edf3" : "#1f2328") + "["), `the ${name} guide took the theme's text ink`);
+    assert(!text.includes(escape(dark ? "#e6edf3" : "#1f2328") + "▏"), `the ${name} guide took the theme's text ink`);
     // The commit inside the pale pink pin fill is a deeper pink, legible over the light
     // end of a map where a white mark vanishes and lighter than the black that was too heavy.
     const deep = { ...model, share: .90, aimShare: .20, commitShare: .80 };
     const commitColumn = context.foldBarTicks(deep).entries().find(([, kind]) => kind === "commit")[0];
     assert.equal(context.foldBarCells(deep)[2 * commitColumn], "pinned", "the fixture's commit point does not sit inside the pin fill");
-    assert(context.renderFoldBar(deep, 400, theme).includes(over(palette[5], "]")), `the ${name} commit bracket over pale pink is not drawn in the toned ink`);
+    assert(context.renderFoldBar(deep, 400, theme).includes(over(palette[5], "▕")), `the ${name} commit stroke over pale pink is not drawn in the toned ink`);
     assert.equal(context.guideInk("#FACCFA", true), "#574C58", "a bracket over pale pink on dark is not the deeper pink");
     assert.equal(context.guideInk("#011959", false), "#C0C6D6", "a bracket over navy on light is not the paler navy");
     for (const hex of palette) {
