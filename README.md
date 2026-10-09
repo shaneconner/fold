@@ -110,7 +110,7 @@ Four commands ship for the human: `/fold-status`, `/fold` (commit every staged m
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/shaneconner/fold/main/media/marks-and-commits-dark.svg">
-  <img alt="A completed unit becomes a pending mark that leaves the window and its cached prefix untouched. Marks repeat for free below maxTarget; at maxTarget one commit applies every standing mark in a single rewrite. From the brief, peek appends the exact bytes and expand restores them in place, both after verifying the SHA-256." src="https://raw.githubusercontent.com/shaneconner/fold/main/media/marks-and-commits-light.svg">
+  <img alt="A completed unit becomes a pending mark that leaves the window and its cached prefix untouched. Marks repeat for free below maxTarget; at maxTarget one commit applies every standing mark in a single rewrite. From the brief, peek appends verified history without thinking blocks and expand restores the original messages in place." src="https://raw.githubusercontent.com/shaneconner/fold/main/media/marks-and-commits-light.svg">
 </picture>
 
 A mark moves nothing. The moment a tool batch or chapter closes, the runtime cuts it into a pending mark, up to eight cuts per pass, stalest first. The mark lives in durable state outside the window, so the projection stays byte-identical and the cached prefix survives. Marks accumulate for free until one commit applies all of them in a single rewrite.
@@ -136,9 +136,11 @@ Every commit re-reads roughly `minTarget` of the budget uncached, so a shallower
 
 ### Peek and expand
 
-`peek` returns a fold's exact SHA-256-verified source as a tool result at any depth, with the ancestors still collapsed. It appends and never edits the prefix, so checking what a fold holds costs nothing a commit has to pay for. It takes `offset` and `bytes` for a bounded slice and reads any child fold by id, so a large fold has a narrow read.
+`peek` verifies a fold's original source against its SHA-256 references, then returns a history view as a tool result at any depth, with the ancestors still collapsed. Assistant thinking blocks and their opaque signatures are omitted before slicing; visible text, tool calls and tool results stay verbatim. It appends and never edits the prefix, so checking what a fold holds costs nothing a commit has to pay for. It takes `offset` and `bytes` within that view for a bounded slice and reads any child fold by id, so a large fold has a narrow read. The result reports `sourceFormat: "messages-without-thinking"` and `omittedThinkingBlocks`. Pi's stored transcript and exact `expand` restoration remain unchanged.
 
 A peek is ephemeral by default: the bytes ride the window until the model's next message, then their place holds a one-line placeholder and the reply that used them is the surviving trace. Peeking again is lossless and costs one append. The default follows what the agent chose: on the run measured for it, six of seven peeks asked for ephemeral at first exposure. `expand` is the commitment, restoring the source in place until the fold is refolded. Looking is not the same as taking.
+
+Anthropic documents [reasoning-extraction refusals](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#keep-reasoning-in-thinking-blocks). Omitting native thinking from history reads avoids replaying it as ordinary text, but does not guarantee that a provider will accept a request. Existing tool results can still contain previously printed transcript excerpts. A durable peek stays in later requests, and reloading makes an ephemeral peek durable. Fold does not automatically retry content-filter refusals or remove arbitrary transcript text.
 
 ### Clipping, pins and the compaction path
 

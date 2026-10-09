@@ -1427,12 +1427,30 @@ export function peekFoldSource(input: {
 }): Record<string, unknown> {
   const fold = input.state.folds.find((item) => item.id === input.foldId);
   if (!fold) throw new Error(`Unknown active-context fold ${input.foldId}`);
-  const messages = foldStoredSpan({
+  const storedMessages = foldStoredSpan({
     foldId: input.foldId,
     state: input.state,
     entries: input.entries,
     sessionId: input.sessionId,
     projectEntry: input.projectEntry,
+  });
+  // Verify the ORIGINAL messages first, then build the history read. Native
+  // reasoning and opaque signatures belong to the provider's assistant protocol,
+  // not to a JSON transcript replayed as ordinary tool-result text (issue #10).
+  // Only structural assistant blocks are removed: prose and tool output containing
+  // words such as "thinking" stay verbatim. Stored refs, hashes and expand are intact.
+  let omittedThinkingBlocks = 0;
+  const messages = storedMessages.map((message) => {
+    const content = ownValue(message, "content");
+    if (!isPlainRecord(message) || ownValue(message, "role") !== "assistant" ||
+        !Array.isArray(content)) return message;
+    const visible = content.filter((block) => {
+      const type = ownValue(block, "type");
+      if (type !== "thinking" && type !== "redacted_thinking") return true;
+      omittedThinkingBlocks += 1;
+      return false;
+    });
+    return visible.length === content.length ? message : { ...message, content: visible };
   });
   const source = stableStringify(messages);
   const sourceBytes = bytes(source);
@@ -1475,6 +1493,8 @@ export function peekFoldSource(input: {
     brief: foldBrief(fold, input.state),
     sourceCount: messages.length,
     sourceSha256: fold.sourceSha256,
+    sourceFormat: "messages-without-thinking",
+    omittedThinkingBlocks,
     sourceBytes,
     offset,
     returnedBytes,
@@ -1493,16 +1513,20 @@ export function peekFoldSource(input: {
       ? { wider: { action: "peek", id: fold.id, bytes: Math.min(sourceBytes, ACTIVE_CONTEXT_POLICY.maxSourceChars) } }
       : {}),
     lifetime: "these bytes stay in the window exactly as returned, like any other tool result, and " +
-      `nothing rewrites this result in place. It is a COPY of fold ${fold.id}'s stored source, so the ` +
+      `nothing rewrites this result in place. It is a COPY of fold ${fold.id}'s source view, so the ` +
       `next commit reclaims it behind a placeholder naming ${fold.id}; peek ${fold.id} again for the ` +
       "same verbatim bytes, or pin this result to keep the copy raw.",
     note: (truncated
-      ? `Bounded read: ${returnedBytes} of ${sourceBytes} exact source bytes, ${view.omittedBytes} omitted ` +
+      ? `Bounded read: ${returnedBytes} of ${sourceBytes} ${omittedThinkingBlocks ? "source view" : "exact source"} bytes, ${view.omittedBytes} omitted ` +
         `from the middle. Widen with bytes, page with offset, or expand ${fold.id} to restore it in place.`
       : children.length
-        ? `Complete stored span, one level: raw entries exactly, and ${children.length} child fold(s) still ` +
+        ? `Complete stored span, one level: raw entries ${omittedThinkingBlocks ? "with thinking blocks omitted" : "exactly"}, and ${children.length} child fold(s) still ` +
           "placeheld. Peek a child id to read its own span; the fold stayed collapsed and no projection changed."
-        : "Complete exact source; the fold stayed collapsed and no projection changed.") +
+        : `Complete ${omittedThinkingBlocks ? "source view" : "exact source"}; the fold stayed collapsed and no projection changed.`) +
+      (omittedThinkingBlocks
+        ? ` ${omittedThinkingBlocks} thinking blocks omitted from this read, including their opaque ` +
+          "signatures. The original messages remain unchanged for exact in-place restoration."
+        : "") +
       (catalog.omitted
         ? ` The nested index seats the shallowest ${index.length} of ${index.length + catalog.omitted} ` +
           "descendant briefs inside the byte budget; the deeper rows are one hop away by peeking a child id, " +
