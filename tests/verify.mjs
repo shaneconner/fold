@@ -19574,6 +19574,77 @@ async function gateAutoCompactionOffRecovery() {
   }
 }
 
+// GATE 187 (issue #10): a history read must not turn native thinking blocks and
+// opaque signatures into ordinary tool-result text. Verification and restoration
+// still use the original messages, including reasoning, without changing Pi's file.
+async function gatePeekOmitsThinkingWithoutChangingSource() {
+  const built = makeFixture({ turns: 8, resultChars: 1_500, chapterChars: 1_000 });
+  for (const message of built.messages) {
+    if (message.role !== "assistant") continue;
+    message.content.unshift(
+      { type: "thinking", thinking: "SYNTHETIC-THOUGHT-187", thinkingSignature: "SYNTHETIC-SIGNATURE-187" },
+      { type: "redacted_thinking", data: "SYNTHETIC-REDACTED-187" },
+    );
+  }
+  // A word in actual work content is not a reasoning block and must stay verbatim.
+  built.messages[0].content[0].text += ' The document says "thinking" and "signature".';
+  built.messages[1].content.find(block => block.type === "toolCall").arguments.metadata =
+    { type: "thinking", thinking: "Application data, not an assistant block." };
+  const thinkingOnly = built.entries.find(entry => entry.id === built.turnEntries[1].at(-1)).message;
+  thinkingOnly.content = thinkingOnly.content.slice(0, 2);
+  built.snapshot = context.mapActiveContext({ sessionId: built.sessionId,
+    eventMessages: built.messages, contextEntries: built.entries });
+  const originalEntries = structuredClone(built.entries);
+  const first = await commitCandidate(context.emptyActiveContextState(built.sessionId), built.snapshot,
+    context.manualFoldCandidate(built.snapshot, context.emptyActiveContextState(built.sessionId), built.turnEntries[0]),
+    { brief: "First synthetic task." });
+  const second = await commitCandidate(first.state, built.snapshot,
+    context.manualFoldCandidate(built.snapshot, first.state, built.turnEntries[1]),
+    { brief: "Second synthetic task." });
+  const parent = await commitCandidate(second.state, built.snapshot,
+    context.manualFoldCandidate(built.snapshot, second.state, [first.prepared.id, second.prepared.id]),
+    { brief: "Two synthetic tasks." });
+  const request = { foldId: first.prepared.id, state: parent.state, entries: built.entries,
+    sessionId: built.sessionId, maximumBytes: 200_000 };
+  const peek = context.peekFoldSource(request);
+  for (const sentinel of ["SYNTHETIC-THOUGHT-187", "SYNTHETIC-SIGNATURE-187", "SYNTHETIC-REDACTED-187"]) {
+    assert(!peek.source.includes(sentinel), `peek replayed ${sentinel} as ordinary text`);
+  }
+  assert.equal(peek.omittedThinkingBlocks, 4);
+  assert.equal(peek.sourceFormat, "messages-without-thinking");
+  assert.equal(peek.truncated, false);
+  assert.match(peek.note, /thinking blocks omitted/i);
+  const originals = built.entries.filter(entry => built.turnEntries[0].includes(entry.id)).map(entry => entry.message);
+  const expected = structuredClone(originals);
+  for (const message of expected) if (message.role === "assistant") {
+    message.content = message.content.filter(block => block.type !== "thinking" && block.type !== "redacted_thinking");
+  }
+  assert.deepEqual(JSON.parse(peek.source), expected, "visible text, tool calls or result bytes changed");
+  assert.equal(peek.sourceBytes, Buffer.byteLength(peek.source));
+  assert.deepEqual(context.recoverFoldMessages(request), originals, "exact recovery lost native reasoning");
+  assert.deepEqual(context.renderFold(parent.state.folds.find(fold => fold.id === first.prepared.id),
+    { ...parent.state, expanded: [parent.prepared.id, first.prepared.id] }, built.snapshot), originals);
+  const page = context.peekFoldSource({ ...request, offset: 1, maximumBytes: 2_048 });
+  assert.equal(page.source, peek.source.slice(1, 2_049));
+  assert.equal(page.nextOffset, 2_049);
+  assert.equal(page.sourceBytes, peek.sourceBytes);
+  assert.equal(page.omittedThinkingBlocks, 4);
+  const parentPeek = context.peekFoldSource({ ...request, foldId: parent.prepared.id });
+  assert.equal(parentPeek.omittedThinkingBlocks, 0);
+  assert.equal(JSON.parse(parentPeek.source).length, 2, "a parent flattened its children");
+  const secondPeek = context.peekFoldSource({ ...request, foldId: second.prepared.id });
+  assert.deepEqual(JSON.parse(secondPeek.source).at(-1).content, [],
+    "a thinking-only message leaked its signature or became invented text");
+  assert.deepEqual(context.recoverFoldMessages({ ...request, foldId: second.prepared.id }).at(-1), thinkingOnly);
+  assert.deepEqual(built.entries, originalEntries, "reading or filtering edited stored history");
+  const drifted = structuredClone(built.entries);
+  drifted.find(entry => entry.message.role === "assistant").message.content[0].thinking = "changed";
+  assert.throws(() => context.peekFoldSource({ ...request, entries: drifted }), /Exact recovery failed/,
+    "filtering must not hide a source digest mismatch");
+  return { thinkingBlocksOmitted: 4, visibleContentExact: true, nested: true, paged: true,
+    originalsUnchanged: true, exactRestoration: true, driftRejected: true, providerCalls: 0 };
+}
+
 const gates = [
   [1, "Registration, parse and deployment branding", gateRegistrationAndBranding],
   [2, "The durable record: lattice, chain and rollback", gateDurableRecord],
@@ -19708,6 +19779,7 @@ const gates = [
   [184, "Unmeasured recovery fills eligible stale context", gateUnmeasuredRecoveryFill],
   [185, "Recovery reporting follows the actual outcome", gateRecoveryReportingIsHonest],
   [186, "Auto-compaction off permits explicit lossless salvage", gateAutoCompactionOffRecovery],
+  [187, "Peek omits thinking while preserving exact restoration", gatePeekOmitsThinkingWithoutChangingSource],
   [174, "A bounded delta run keeps the replay bounded", gateBoundedDeltaRun],
   [175, "A fold is proven once per replay", gateFoldProvenOncePerReplay],
   [176, "Host peers fold, retrieve and reload in the real SDK", gateHostPeersAndSdkSession],
