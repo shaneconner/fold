@@ -1,13 +1,13 @@
 cff-version: 1.2.0
 message: "If you use pi-fold, cite it as below. To cite the research, use the preferred citation: it is the most recent campaign and cites the three before it."
 title: "pi-fold"
-abstract: "Lossless context folding for Pi. Finished spans of a session transcript collapse in place into short briefs; the exact originals stay on disk, addressed and verified by SHA-256, and peek and expand return them byte for byte. Folding is automatic and needs no agent participation."
+abstract: "Lossless context folding for Pi. Finished spans of a session transcript collapse in place into short briefs; the exact originals stay on disk, addressed and verified by SHA-256. Peek reads history without thinking blocks, and expand restores the original messages byte for byte. Folding is automatic and needs no agent participation."
 type: software
 authors:
   - family-names: Conner
     given-names: Shane
-version: 4.2.7
-date-released: 2026-10-07
+version: 4.2.8
+date-released: 2026-10-09
 license: MIT
 repository-code: "https://github.com/shaneconner/fold"
 url: "https://shaneconner.com/projects/pi-fold/"
