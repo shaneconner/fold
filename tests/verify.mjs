@@ -2398,7 +2398,7 @@ async function gatePeekAndFoldIndex() {
     { ...seeded, expanded: [consolidationId, childId] },
     forest.snapshot,
   );
-  assert.equal(peek.details.source, json.stableStringify(restored));
+  assert.equal(peek.details.source, context.renderHistoryText(restored).text);
   assert.equal(peek.details.sourceCount, restored.length);
   assert.equal(peek.details.truncated, false);
   assert.equal(peek.details.depth, 1);
@@ -2423,7 +2423,7 @@ async function gatePeekAndFoldIndex() {
     sessionId: big.sessionId,
   };
   const bounded = context.peekFoldSource(peekArguments);
-  const complete = json.stableStringify(context.recoverFoldMessages(peekArguments));
+  const complete = context.renderHistoryText(context.recoverFoldMessages(peekArguments)).text;
   assert.equal(bounded.truncated, true);
   assert.equal(bounded.sourceBytes, Buffer.byteLength(complete, "utf8"));
   assert(bounded.sourceBytes > context.PEEK_DEFAULT_MAX_BYTES);
@@ -7889,7 +7889,7 @@ async function gateUnifiedSpanLaw() {
   const peekedText = peeked.content.map((part) => part.text ?? "").join(" ");
   assert(peeked.details.source.includes(childIds[0]),
     "Peek of a nested parent named no child to descend into");
-  assert(peeked.details.source.includes('"placeholder":"fold"'),
+  assert(peeked.details.source.includes(`### folded ${state.folds.find(fold => fold.id === childIds[0]).kind} ${childIds[0]}`),
     "Peek of a nested parent did not keep its children placeheld");
   assert(grandchildBytes > 4 * peekedText.length,
     "Peek of a nested parent leaked bytes from under its children: " +
@@ -19585,6 +19585,8 @@ async function gatePeekOmitsThinkingWithoutChangingSource() {
       { type: "thinking", thinking: "SYNTHETIC-THOUGHT-187", thinkingSignature: "SYNTHETIC-SIGNATURE-187" },
       { type: "redacted_thinking", data: "SYNTHETIC-REDACTED-187" },
     );
+    Object.assign(message, { provider: "anthropic", model: "claude-synthetic-187", api: "anthropic-messages",
+      usage: { input: 1, output: 2 }, responseId: "msg_synthetic_187", stopReason: message.stopReason ?? "stop" });
   }
   // A word in actual work content is not a reasoning block and must stay verbatim.
   built.messages[0].content[0].text += ' The document says "thinking" and "signature".';
@@ -19611,15 +19613,34 @@ async function gatePeekOmitsThinkingWithoutChangingSource() {
     assert(!peek.source.includes(sentinel), `peek replayed ${sentinel} as ordinary text`);
   }
   assert.equal(peek.omittedThinkingBlocks, 4);
-  assert.equal(peek.sourceFormat, "messages-without-thinking");
+  assert.equal(peek.sourceFormat, "history-text");
   assert.equal(peek.truncated, false);
   assert.match(peek.note, /thinking blocks omitted/i);
   const originals = built.entries.filter(entry => built.turnEntries[0].includes(entry.id)).map(entry => entry.message);
-  const expected = structuredClone(originals);
-  for (const message of expected) if (message.role === "assistant") {
-    message.content = message.content.filter(block => block.type !== "thinking" && block.type !== "redacted_thinking");
+  // Issue #12: the read is plain text, not message JSON with provider metadata.
+  assert.throws(() => JSON.parse(peek.source), SyntaxError, "peek still returned message JSON");
+  for (const field of ['"role"', '"provider"', '"model"', '"usage"', '"responseId"', '"stopReason"', '"api"']) {
+    assert(!peek.source.includes(field), `peek replayed ${field} metadata`);
   }
-  assert.deepEqual(JSON.parse(peek.source), expected, "visible text, tool calls or result bytes changed");
+  for (const message of originals) {
+    for (const block of Array.isArray(message.content) ? message.content : []) {
+      if (block.type === "text") assert(peek.source.includes(block.text), "visible text changed");
+      if (block.type === "toolCall") {
+        assert(peek.source.includes(`[tool call: ${block.name} (${block.id})]\n${json.stableStringify(block.arguments)}`),
+          "a tool call or its arguments changed");
+      }
+    }
+    if (message.role === "toolResult") {
+      assert(peek.source.includes(`### tool result: ${message.toolName} (${message.toolCallId})`));
+      for (const block of message.content) if (block.type === "text") {
+        assert(peek.source.includes(block.text), "tool result bytes changed");
+      }
+    }
+  }
+  assert(peek.source.includes('The document says "thinking" and "signature".'), "prose mentioning thinking was dropped");
+  assert(peek.source.includes('"metadata":{"type":"thinking","thinking":"Application data, not an assistant block."}'),
+    "tool-call arguments shaped like thinking were dropped");
+  assert.equal(peek.source, context.renderHistoryText(originals).text, "the read is not deterministic");
   assert.equal(peek.sourceBytes, Buffer.byteLength(peek.source));
   assert.deepEqual(context.recoverFoldMessages(request), originals, "exact recovery lost native reasoning");
   assert.deepEqual(context.renderFold(parent.state.folds.find(fold => fold.id === first.prepared.id),
@@ -19631,9 +19652,10 @@ async function gatePeekOmitsThinkingWithoutChangingSource() {
   assert.equal(page.omittedThinkingBlocks, 4);
   const parentPeek = context.peekFoldSource({ ...request, foldId: parent.prepared.id });
   assert.equal(parentPeek.omittedThinkingBlocks, 0);
-  assert.equal(JSON.parse(parentPeek.source).length, 2, "a parent flattened its children");
+  assert.equal(parentPeek.source.match(/^### folded /gm)?.length, 2, "a parent flattened its children");
+  assert(parentPeek.source.includes(`{"action":"peek","id":"${first.prepared.id}"}`), "a child placeholder lost its peek");
   const secondPeek = context.peekFoldSource({ ...request, foldId: second.prepared.id });
-  assert.deepEqual(JSON.parse(secondPeek.source).at(-1).content, [],
+  assert(secondPeek.source.endsWith("### assistant"),
     "a thinking-only message leaked its signature or became invented text");
   assert.deepEqual(context.recoverFoldMessages({ ...request, foldId: second.prepared.id }).at(-1), thinkingOnly);
   assert.deepEqual(built.entries, originalEntries, "reading or filtering edited stored history");
@@ -19641,7 +19663,7 @@ async function gatePeekOmitsThinkingWithoutChangingSource() {
   drifted.find(entry => entry.message.role === "assistant").message.content[0].thinking = "changed";
   assert.throws(() => context.peekFoldSource({ ...request, entries: drifted }), /Exact recovery failed/,
     "filtering must not hide a source digest mismatch");
-  return { thinkingBlocksOmitted: 4, visibleContentExact: true, nested: true, paged: true,
+  return { thinkingBlocksOmitted: 4, visibleContentExact: true, metadataOmitted: true, nested: true, paged: true,
     originalsUnchanged: true, exactRestoration: true, driftRejected: true, providerCalls: 0 };
 }
 
@@ -19779,7 +19801,7 @@ const gates = [
   [184, "Unmeasured recovery fills eligible stale context", gateUnmeasuredRecoveryFill],
   [185, "Recovery reporting follows the actual outcome", gateRecoveryReportingIsHonest],
   [186, "Auto-compaction off permits explicit lossless salvage", gateAutoCompactionOffRecovery],
-  [187, "Peek omits thinking while preserving exact restoration", gatePeekOmitsThinkingWithoutChangingSource],
+  [187, "Peek reads plain history while preserving exact restoration", gatePeekOmitsThinkingWithoutChangingSource],
   [174, "A bounded delta run keeps the replay bounded", gateBoundedDeltaRun],
   [175, "A fold is proven once per replay", gateFoldProvenOncePerReplay],
   [176, "Host peers fold, retrieve and reload in the real SDK", gateHostPeersAndSdkSession],
