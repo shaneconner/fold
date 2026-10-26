@@ -1434,25 +1434,16 @@ export function peekFoldSource(input: {
     sessionId: input.sessionId,
     projectEntry: input.projectEntry,
   });
-  // Verify the ORIGINAL messages first, then build the history read. Native
-  // reasoning and opaque signatures belong to the provider's assistant protocol,
-  // not to a JSON transcript replayed as ordinary tool-result text (issue #10).
-  // Only structural assistant blocks are removed: prose and tool output containing
-  // words such as "thinking" stay verbatim. Stored refs, hashes and expand are intact.
-  let omittedThinkingBlocks = 0;
-  const messages = storedMessages.map((message) => {
-    const content = ownValue(message, "content");
-    if (!isPlainRecord(message) || ownValue(message, "role") !== "assistant" ||
-        !Array.isArray(content)) return message;
-    const visible = content.filter((block) => {
-      const type = ownValue(block, "type");
-      if (type !== "thinking" && type !== "redacted_thinking") return true;
-      omittedThinkingBlocks += 1;
-      return false;
-    });
-    return visible.length === content.length ? message : { ...message, content: visible };
-  });
-  const source = stableStringify(messages);
+  // Verify the ORIGINAL messages first, then build the history read: plain text,
+  // not the stored message JSON (issues #10 and #12). A JSON array of assistant
+  // messages carrying model, provider, usage and response ids reads like exported
+  // model output, and native reasoning with its opaque signatures belongs to the
+  // provider's protocol, not to an ordinary tool result. The text keeps every
+  // visible word, tool call and tool result; stored refs, hashes and expand are intact.
+  const rendered = renderHistoryText(storedMessages);
+  const { omittedThinkingBlocks } = rendered;
+  const messages = storedMessages;
+  const source = rendered.text;
   const sourceBytes = bytes(source);
   const offset = Math.min(Math.max(0, input.offset ?? 0), sourceBytes);
   // The widest read anyone may ask for is the policy's own source cap, the same ceiling
@@ -1493,7 +1484,7 @@ export function peekFoldSource(input: {
     brief: foldBrief(fold, input.state),
     sourceCount: messages.length,
     sourceSha256: fold.sourceSha256,
-    sourceFormat: "messages-without-thinking",
+    sourceFormat: PEEK_SOURCE_FORMAT,
     omittedThinkingBlocks,
     sourceBytes,
     offset,
@@ -1517,12 +1508,12 @@ export function peekFoldSource(input: {
       `next commit reclaims it behind a placeholder naming ${fold.id}; peek ${fold.id} again for the ` +
       "same verbatim bytes, or pin this result to keep the copy raw.",
     note: (truncated
-      ? `Bounded read: ${returnedBytes} of ${sourceBytes} ${omittedThinkingBlocks ? "source view" : "exact source"} bytes, ${view.omittedBytes} omitted ` +
+      ? `Bounded read: ${returnedBytes} of ${sourceBytes} history-text bytes, ${view.omittedBytes} omitted ` +
         `from the middle. Widen with bytes, page with offset, or expand ${fold.id} to restore it in place.`
       : children.length
-        ? `Complete stored span, one level: raw entries ${omittedThinkingBlocks ? "with thinking blocks omitted" : "exactly"}, and ${children.length} child fold(s) still ` +
+        ? `Complete stored span, one level: raw entries as plain text, and ${children.length} child fold(s) still ` +
           "placeheld. Peek a child id to read its own span; the fold stayed collapsed and no projection changed."
-        : `Complete ${omittedThinkingBlocks ? "source view" : "exact source"}; the fold stayed collapsed and no projection changed.`) +
+        : "Complete history text; the fold stayed collapsed and no projection changed.") +
       (omittedThinkingBlocks
         ? ` ${omittedThinkingBlocks} thinking blocks omitted from this read, including their opaque ` +
           "signatures. The original messages remain unchanged for exact in-place restoration."
@@ -1545,6 +1536,90 @@ export function peekFoldSource(input: {
       }
       : {}),
   };
+}
+
+export const PEEK_SOURCE_FORMAT = "history-text";
+
+// Provider bookkeeping a history read never needs. It is what makes a message array
+// look like an exported model transcript, and none of it is work content.
+const HISTORY_METADATA_KEYS = new Set([
+  "role", "content", "provider", "model", "api", "usage", "responseId", "stopReason",
+  "timestamp", "toolCallId", "toolName", "isError",
+]);
+
+function historyBlock(block: unknown, counter: { thinking: number }): string | null {
+  if (typeof block === "string") return block;
+  const type = ownValue(block, "type");
+  if (type === "thinking" || type === "redacted_thinking") { counter.thinking += 1; return null; }
+  if (type === "text") {
+    const text = ownValue(block, "text");
+    return typeof text === "string" ? text : "";
+  }
+  if (type === "toolCall") {
+    const name = ownValue(block, "name");
+    const id = ownValue(block, "id");
+    const args = ownValue(block, "arguments");
+    return `[tool call: ${typeof name === "string" ? name : "unknown"}` +
+      `${typeof id === "string" ? ` (${id})` : ""}]\n` +
+      (args === undefined ? "" : stableStringify(args));
+  }
+  if (type === "image") {
+    const mime = ownValue(block, "mimeType");
+    return `[image${typeof mime === "string" ? `: ${mime}` : ""}; expand restores it]`;
+  }
+  return stableStringify(block);
+}
+
+function historyContent(content: unknown, counter: { thinking: number }): string {
+  if (content === undefined || content === null) return "";
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return stableStringify(content);
+  return content.map((block) => historyBlock(block, counter))
+    .filter((part): part is string => part !== null)
+    .join("\n\n");
+}
+
+// The peek view of a stored span: one labelled section per message, each holding the
+// visible text, tool calls with their arguments, and tool results verbatim. Thinking
+// blocks and provider metadata are left out; nested fold placeholders read as a line
+// with their brief and the id that peeks them. Deterministic, so offset paging is stable.
+export function renderHistoryText(messages: readonly unknown[]): {
+  text: string;
+  omittedThinkingBlocks: number;
+} {
+  const counter = { thinking: 0 };
+  const sections = messages.map((message) => {
+    if (!isPlainRecord(message)) return `### entry\n${stableStringify(message)}`;
+    if (ownValue(message, "placeholder") === "fold") {
+      const id = String(ownValue(message, "id"));
+      const children = Number(ownValue(message, "children") ?? 0);
+      return `### folded ${String(ownValue(message, "kind"))} ${id}` +
+        `${children ? `, ${children} child fold(s)` : ""}\n` +
+        `${String(ownValue(message, "brief") ?? "")}\n` +
+        `(peek it with {"action":"peek","id":"${id}"})`;
+    }
+    const role = messageRole(message) ?? "entry";
+    let header: string;
+    if (role === "toolResult") {
+      const name = ownValue(message, "toolName");
+      const id = ownValue(message, "toolCallId");
+      header = `### tool result: ${typeof name === "string" ? name : "unknown"}` +
+        `${typeof id === "string" ? ` (${id})` : ""}` +
+        `${ownValue(message, "isError") === true ? " [error]" : ""}`;
+    } else {
+      header = `### ${role}`;
+    }
+    const body = historyContent(ownValue(message, "content"), counter);
+    // Any other own field (a bash command, a summary, an error message) is content the
+    // reader may need; only the bookkeeping above is dropped.
+    const extras = Object.keys(message).filter((key) => !HISTORY_METADATA_KEYS.has(key))
+      .sort().map((key) => {
+        const value = (message as Record<string, unknown>)[key];
+        return `${key}: ${typeof value === "string" ? value : stableStringify(value)}`;
+      });
+    return [header, ...extras, ...(body ? [body] : [])].join("\n");
+  });
+  return { text: sections.join("\n\n"), omittedThinkingBlocks: counter.thinking };
 }
 
 export function headTailMarker(omittedBytes: number): string {
