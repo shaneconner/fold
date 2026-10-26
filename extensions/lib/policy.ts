@@ -302,6 +302,28 @@ export const ESTIMATED_BYTES_PER_TOKEN = 4;
 export const IMAGE_ESTIMATED_TOKENS = 1_600;
 export const ESTIMATED_PLACEHOLDER_OVERHEAD_BYTES = 240;
 
+/**
+ * ONE TOOL RESULT MAY NOT FILL THE WINDOW BY ITSELF (issue #13, 2026-10-26).
+ *
+ * Folding rewrites the old end of the window and leaves the fresh end alone, so a single
+ * fresh tool result larger than the serving budget is out of its reach: the provider
+ * rejects the request, the rollback retries it with the same result inside, and every
+ * later prompt carries it again. The images in issue #13 are priced flat now, but the
+ * same megabyte returned as text by any tool other than read, bash or MCP still wedged
+ * the session. Above this share of the window a result is pinned as exact evidence and
+ * the window gets its head and a reference to the artifact, the way an oversized read
+ * already does. A share rather than a byte count, so a small window is protected
+ * without clipping results that a large one holds comfortably.
+ */
+export const OVERSIZED_TOOL_RESULT_WINDOW_SHARE = 0.25;
+
+export function oversizedToolResultBytes(window: number | null | undefined): number {
+  const resolved = typeof window === "number" && Number.isFinite(window) && window > 0
+    ? window
+    : DEFAULT_CONTEXT_WINDOW;
+  return Math.floor(resolved * OVERSIZED_TOOL_RESULT_WINDOW_SHARE) * ESTIMATED_BYTES_PER_TOKEN;
+}
+
 export const PEEK_MIN_SLICE_BYTES = 1_024;
 
 export const STATUS_DIET_INDEX_ROWS = 5;

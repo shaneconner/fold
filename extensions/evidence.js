@@ -11,7 +11,12 @@ import {
 } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { denseOwnArrayValues, evidenceValue, isPlainRecord, ownDataProperty, stableStringify } from "./json.ts";
-import { DEFAULT_ACTIVE_CONTEXT_ENTRY_TYPE_PREFIX, entryTypeNamespace } from "./lib/policy.ts";
+import { contextWindowFor } from "./lib/measurement.ts";
+import {
+  DEFAULT_ACTIVE_CONTEXT_ENTRY_TYPE_PREFIX,
+  entryTypeNamespace,
+  oversizedToolResultBytes,
+} from "./lib/policy.ts";
 
 export const EVIDENCE_REFERENCE_VERSION = 1;
 export const TOOL_RESULT_PROJECTION_BYTES = 16 * 1024;
@@ -640,6 +645,22 @@ export function registerEvidenceIngestion(pi, {
       return projectEvidenceText(text || "Oversized structured MCP result", descriptor, "utf8-head", {
         mcpServer: mcpServerForTool(toolName, evidenceNamespace),
       });
+    }
+
+    // Any other tool: raw unless the one result would crowd the window by itself.
+    if (utf8Bytes(text) > oversizedToolResultBytes(contextWindowFor(ctx))) {
+      const descriptor = await writeEvidenceArtifact({
+        sessionFile,
+        ownerKind: "pi-session",
+        ownerId: sessionId,
+        bytes: Buffer.from(text, "utf8"),
+        mediaType: "text/plain",
+        encoding: "utf-8",
+        source: { toolName, toolCallId, artifactKind: "oversized-tool-result" },
+        evidenceDirectory,
+      });
+      const truncation = boundedTruncation(ownDataProperty(details, "truncation"));
+      return projectEvidenceText(text, descriptor, "utf8-head", truncation ? { truncation } : undefined);
     }
   });
 }

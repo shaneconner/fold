@@ -49,8 +49,10 @@ These are not 2.0 blockers and have no promoted build:
 
 - Record fold-side recovery when an already fenced retry aborts before the
   projection budget runs.
-- Decide how exact evidence ingestion should handle one message that exceeds the
-  serving budget by itself.
+- ~~Decide how exact evidence ingestion should handle one message that exceeds the
+  serving budget by itself.~~ Settled for tool results (issue #13, gate 188): a
+  result above a quarter of the window is pinned as exact evidence and the window
+  keeps its head and a reference. A pasted user message of that size is still open.
 - Reduce action arguments that no longer describe agent control under epoch
   scheduling.
 

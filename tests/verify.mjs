@@ -19645,6 +19645,85 @@ async function gatePeekOmitsThinkingWithoutChangingSource() {
     originalsUnchanged: true, exactRestoration: true, driftRejected: true, providerCalls: 0 };
 }
 
+/**
+ * GATE 188: ONE TOOL RESULT CANNOT WEDGE THE SESSION (issue #13, 2026-10-26).
+ *
+ * On 3.0.0 a 1MB base64 screenshot read as 250K tokens against a 128K window and the
+ * fence aborted every request for the rest of the session. The image half is closed:
+ * an image is priced flat and the request transmits. The text half was still open. The
+ * same megabyte returned as TEXT by a tool the evidence hook did not know sat raw at the
+ * fresh end of the window, where no fold reaches, so the provider rejected the request,
+ * the rollback retried it unchanged, and every later prompt carried it again. Above a
+ * quarter of the window such a result is pinned as exact evidence and the window keeps
+ * its head and a reference. A result under the share stays raw, and so does an image.
+ *
+ * ANTI-VACUITY: on the pre-fix runtime the hook returns nothing for an unknown tool, so
+ * the oversized result reaches the window whole and the first assertion fails.
+ */
+async function gateOneToolResultCannotWedgeTheSession() {
+  const scratch = await mkdtemp(join(tmpdir(), "pi-fold-oversized-"));
+  try {
+    const window = 128_000;
+    const built = makeFixture({ turns: 4, resultChars: 4_000, contextWindow: window, sessionId: "oversized-result" });
+    const runtime = makeRuntime(built, { registerEvidence: true, sessionFile: join(scratch, "session.jsonl") });
+    runtime.usage = { tokens: null, contextWindow: window };
+    await startRuntime(runtime);
+    const hook = runtime.handlers.get("tool_result");
+    const cap = policyModule.oversizedToolResultBytes(window);
+    assert.equal(cap, window / 4 * context.ESTIMATED_BYTES_PER_TOKEN);
+
+    // The issue's megabyte, as text from a tool the hook has no projector for.
+    const payload = `iVBORw0KGgo${"A".repeat(1_024_264)}`;
+    const projection = await hook({
+      toolName: "webfetch", toolCallId: "oversized-call", isError: false,
+      content: [{ type: "text", text: payload }], details: {},
+    }, runtime.ctx);
+    assert(projection?.details?.evidence, "an oversized result from an unknown tool reached the window raw");
+    const projectedBytes = Buffer.byteLength(projection.content[0].text, "utf8");
+    assert(projectedBytes <= evidenceModule.TOOL_RESULT_PROJECTION_BYTES + 1_024,
+      `the projected result is ${projectedBytes} bytes`);
+    assert(projection.content[0].text.startsWith(payload.slice(0, 1_000)), "the projection lost the result's head");
+    assert(projection.content[0].text.includes(projection.details.evidence.path), "the projection names no artifact");
+    assert.equal(projection.details.evidence.source.artifactKind, "oversized-tool-result");
+    // Exact: the artifact is the whole result, byte for byte, and read-only.
+    assert.equal(await readFile(projection.details.evidence.path, "utf8"), payload);
+    assert.equal((await stat(projection.details.evidence.path)).mode & 0o777, 0o444);
+
+    // Under the share: raw, as before. Every tool already in the suite stays this way.
+    assert.equal(await hook({
+      toolName: "webfetch", toolCallId: "small-call", isError: false,
+      content: [{ type: "text", text: "w".repeat(cap - 1) }], details: {},
+    }, runtime.ctx), undefined, "a result under the share was clipped");
+    // A larger window holds the same result raw: the cap is a share, not a byte count.
+    runtime.usage = { tokens: null, contextWindow: 1_000_000 };
+    assert.equal(await hook({
+      toolName: "webfetch", toolCallId: "wide-call", isError: false,
+      content: [{ type: "text", text: "w".repeat(cap * 2) }], details: {},
+    }, runtime.ctx), undefined, "a 1M window clipped a result an eighth of its size");
+    runtime.usage = { tokens: null, contextWindow: window };
+
+    // The image form: the hook leaves it alone, the estimate prices it flat, and the
+    // request that carries it is transmitted rather than refused.
+    const image = [{ type: "text", text: "Read image file [image/png]" }, { type: "image", data: payload, mimeType: "image/png" }];
+    assert.equal(await hook({
+      toolName: "read", toolCallId: "shot", isError: false, content: image, details: {},
+    }, runtime.ctx), undefined, "the evidence hook rewrote an image result");
+    runtime.appendMessage({ role: "user", content: [{ type: "text", text: "Look at the screenshot." }], timestamp: 9_000 });
+    runtime.appendMessage({
+      role: "assistant", stopReason: "toolUse", timestamp: 9_001,
+      content: [{ type: "toolCall", id: "shot", name: "read", arguments: { path: "shot.png" } }],
+    });
+    runtime.appendMessage({ role: "toolResult", toolCallId: "shot", toolName: "read", isError: false, timestamp: 9_002, content: image });
+    await project(runtime);
+    assert.equal(runtime.aborts, 0, "a request carrying one screenshot was refused before transmission");
+    const pricedTokens = measurementModule.pricedBytes(runtime.messages) / context.ESTIMATED_BYTES_PER_TOKEN;
+    assert(pricedTokens < window / 2, `the screenshot session is estimated at ${pricedTokens} tokens`);
+    return { capBytes: cap, projectedBytes, artifactBytes: Buffer.byteLength(payload), pricedTokens: Math.round(pricedTokens), aborts: runtime.aborts };
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
 const gates = [
   [1, "Registration, parse and deployment branding", gateRegistrationAndBranding],
   [2, "The durable record: lattice, chain and rollback", gateDurableRecord],
@@ -19780,6 +19859,7 @@ const gates = [
   [185, "Recovery reporting follows the actual outcome", gateRecoveryReportingIsHonest],
   [186, "Auto-compaction off permits explicit lossless salvage", gateAutoCompactionOffRecovery],
   [187, "Peek omits thinking while preserving exact restoration", gatePeekOmitsThinkingWithoutChangingSource],
+  [188, "One tool result cannot wedge the session", gateOneToolResultCannotWedgeTheSession],
   [174, "A bounded delta run keeps the replay bounded", gateBoundedDeltaRun],
   [175, "A fold is proven once per replay", gateFoldProvenOncePerReplay],
   [176, "Host peers fold, retrieve and reload in the real SDK", gateHostPeersAndSdkSession],
