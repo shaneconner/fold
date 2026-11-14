@@ -63,7 +63,7 @@ The agent gets one tool, `pi_fold_context`, with actions to `status`, `peek`, `e
 
 ## Configuration
 
-The defaults are the benchmarked setup, so there's nothing you need to tune.
+The defaults are the benchmarked setup, so there's nothing you need to tune. To change one, use `/fold-settings` or edit `~/.config/pi-fold/settings.json`, which pi-fold reads when pi starts. `providerInputBudget` and `blacklistAutoFoldTools` aren't in the settings file; pass them from your own extension with `registerPiFold(pi, options)`.
 
 | Option | Default | What it controls |
 | --- | --- | --- |

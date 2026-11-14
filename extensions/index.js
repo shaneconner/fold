@@ -1,5 +1,6 @@
 import { registerActiveContext } from "./active-context.ts";
 import { registerEvidenceIngestion } from "./evidence.js";
+import { loadFoldSettingsFile, registerFoldSettings } from "./settings.ts";
 
 export {
   applyFoldSettingsEdit,
@@ -78,6 +79,11 @@ export function registerPiFold(pi, options = {}) {
   return registerActiveContext(pi, options);
 }
 
-export default function piFold(pi, options) {
+// THE PACKAGE ENTRY IS THE WHOLE DEPLOYMENT (issue #18, 2026-11-14). Pi loads this default
+// export and passes no options, so it does what a hand-written deployment does: it reads
+// the settings file and registers /fold-settings beside the runtime. It used to do
+// neither, and an npm install had no /fold-settings and ignored the file it would write.
+export default function piFold(pi, options = loadFoldSettingsFile()) {
+  registerFoldSettings(pi);
   return registerPiFold(pi, options);
 }
