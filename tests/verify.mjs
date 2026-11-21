@@ -19827,6 +19827,87 @@ async function gatePackageEntryIsTheWholeDeployment() {
   }
 }
 
+/**
+ * GATE 190: A FOREIGN SYMBOL DOES NOT STOP FOLDING (issue #21, 2026-11-21).
+ *
+ * Another extension can hand Pi a tool result whose message is plain JSON only when it is
+ * serialized: pi-subagents@0.89.2 decorates its child-run result with
+ * Symbol("remainingTimeoutMs") and Symbol("afterCompactionSettlement") before returning it
+ * as `details.results[i]`. `JSON.stringify` drops those keys, so the persisted session and
+ * every evidence copy read as ordinary JSON, and nothing in the transcript can point at the
+ * message that broke folding.
+ *
+ * What broke: `message_end` hashes the WHOLE message for `context.usage.message_sha256`,
+ * and the strict serializer threw `Value contains a symbol property` on the nested foreign
+ * details. The enclosing try fed that to `suspendAutomatic`, so one instrumentation row
+ * cost the session its folding for as long as it stayed open, and the only surface that
+ * said so was a red FOLDING STOPPED in the bar.
+ *
+ * ANTI-VACUITY: on 4.3.1 the same message leaves `automatic.automaticFailure` set and a
+ * `context.suspend` record in the stream. The gate also asserts the usage row still lands,
+ * so a fix that simply stopped hashing messages would fail it too.
+ */
+async function gateForeignSymbolDoesNotStopFolding() {
+  const built = makeFixture({ turns: 8, resultChars: 10_000, contextWindow: 100_000, sessionId: "foreign-symbol" });
+  const runtime = makeRuntime(built);
+  runtime.usage = { tokens: null, contextWindow: 100_000 };
+  await startRuntime(runtime);
+
+  // The shape pi-subagents returns: a tool result carrying `usage` at the top level, with
+  // private Symbols keyed onto its nested child-run result.
+  const details = { mode: "single", runId: "run-1", results: [{ index: 0, agent: "scout", exitCode: 0 }] };
+  details.results[0][Symbol("remainingTimeoutMs")] = 90_000;
+  details.results[0][Symbol("afterCompactionSettlement")] = true;
+  const message = {
+    role: "toolResult", toolCallId: "call-1", toolName: "subagent", isError: false,
+    content: [{ type: "text", text: "child finished" }],
+    details,
+    usage: { input: 5_449, output: 657, cacheRead: 9_984, cacheWrite: 0 },
+    timestamp: 1,
+  };
+  // Handed over WITHOUT cloning: structuredClone drops Symbol keys, and the whole point is
+  // that the runtime sees the object another extension actually built.
+  const eventsBefore = runtime.appended.length;
+  await runtime.handlers.get("message_end")({ message }, runtime.ctx);
+  await settle();
+
+  const events = runtime.appended
+    .slice(eventsBefore)
+    .filter((entry) => entry.customType === "pi-fold-context-event")
+    .map((entry) => entry.data);
+  const suspends = events.filter((record) => record.kind === "context.suspend");
+  assert.equal(suspends.length, 0,
+    `a foreign Symbol suspended folding: ${JSON.stringify(suspends[0]?.error ?? null)}`);
+  const status = await toolStatus(runtime);
+  assert.equal(status.details.automatic.automaticFailure ?? null, null,
+    "folding stayed suspended after one foreign symbol");
+  assert.equal(status.details.automaticSuspended ?? false, false, "folding is still suspended");
+
+  // The instrumentation row still lands, and it digests what the host would persist: the
+  // Symbol keys are dropped, exactly as JSON drops them.
+  const usage = events.find((record) => record.kind === "context.usage");
+  assert(usage, "the foreign message produced no usage row");
+  assert(/^[a-f0-9]{64}$/.test(usage.message_sha256), `the usage row has no digest: ${usage.message_sha256}`);
+  assert.equal(usage.message_sha256, json.evidenceSha256({
+    role: "toolResult", toolCallId: "call-1", toolName: "subagent", isError: false,
+    content: [{ type: "text", text: "child finished" }],
+    details: { mode: "single", runId: "run-1", results: [{ index: 0, agent: "scout", exitCode: 0 }] },
+    usage: { input: 5_449, output: 657, cacheRead: 9_984, cacheWrite: 0 },
+    timestamp: 1,
+  }), "the digest is not the JSON-visible projection of the message");
+
+  // Folding still works afterwards: the same runtime reaches a commit when the boundary
+  // comes, which is what the suspension used to take away.
+  await measure(runtime, 85_000, 100_000);
+  await project(runtime);
+  await settle();
+  await compactBoundary(runtime);
+  await runtimeCommit(runtime, { measured: false });
+  const folds = materialized(runtime).folds.length;
+  assert(folds > 0, "folding never produced work after the foreign symbol");
+  return { suspended: false, folds };
+}
+
 const gates = [
   [1, "Registration, parse and deployment branding", gateRegistrationAndBranding],
   [2, "The durable record: lattice, chain and rollback", gateDurableRecord],
@@ -19963,6 +20044,7 @@ const gates = [
   [186, "Auto-compaction off permits explicit lossless salvage", gateAutoCompactionOffRecovery],
   [187, "Peek reads plain history while preserving exact restoration", gatePeekOmitsThinkingWithoutChangingSource],
   [188, "One tool result cannot wedge the session", gateOneToolResultCannotWedgeTheSession],
+  [190, "A foreign Symbol does not stop folding", gateForeignSymbolDoesNotStopFolding],
   [189, "The package entry is the whole deployment", gatePackageEntryIsTheWholeDeployment],
   [174, "A bounded delta run keeps the replay bounded", gateBoundedDeltaRun],
   [175, "A fold is proven once per replay", gateFoldProvenOncePerReplay],

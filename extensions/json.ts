@@ -78,7 +78,18 @@ function safeJson(value: unknown, ancestors: unknown[]): string | undefined {
     let emitted = 0;
     for (let index = 0; index < keys.length; index += 1) {
       const key = keys[index];
-      if (typeof key !== "string") throw new Error("Value contains a symbol property");
+      // A SYMBOL KEY IS NOT A SERIALIZATION FAILURE (issue #21, 2026-11-21). The host
+      // persists and hashes messages with JSON semantics, which drop symbol-keyed
+      // properties, and another extension can decorate an object it hands Pi with a
+      // private Symbol: pi-subagents@0.89.2 marks its child-run result with
+      // Symbol("remainingTimeoutMs") before returning it as tool result details. Throwing
+      // here made the message unhashable, and the caller that hashes the whole message on
+      // `message_end` treated that as a reason to suspend folding for the session — a
+      // failure with no owner, invisible in the transcript because JSON never showed the
+      // key. Skipping agrees with the host instead of refusing what the host itself
+      // serializes, and no canonical object this package builds ever carries a Symbol, so
+      // nothing this package proves about its own state is weakened.
+      if (typeof key !== "string") continue;
       const descriptor = getOwnPropertyDescriptor(value, key);
       if (!descriptor || !("value" in descriptor)) throw new Error("Value contains an object accessor");
       if (!descriptor.enumerable) continue;
