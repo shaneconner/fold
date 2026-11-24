@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/pi-fold)](https://www.npmjs.com/package/pi-fold) [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22142456.svg)](https://doi.org/10.5281/zenodo.22142456)
 
-**Long sessions without forgetting.** pi-fold rotates stale context out of the window and into short briefs, while the exact originals stay on disk one tool call away. It runs automatically, keeps your prefix cache warm, and never throws anything away.
+**Lossless context folding for Pi.** pi-fold rotates stale context out of the window and into short briefs, while the exact originals stay on disk one tool call away. It runs automatically and batches its rewrites so the prefix cache stays warm.
 
 ![pi-fold folding a session in place: marks outline completed spans as the session works, and the marks commit together at a fold event](https://raw.githubusercontent.com/shaneconner/fold/main/media/fold-demo.gif)
 
@@ -14,11 +14,11 @@ pi install npm:pi-fold
 
 Requires Node 22+ and Pi 0.83+ (Pi 1.0 needs Node 22.19+). MIT licensed.
 
-For the best results, pair it with a long-term memory store such as [pi-canon](https://github.com/shaneconner/canon). Folding keeps the window lean; the store keeps what the session learned. Together they were the strongest setup in every benchmark.
+It is meant to be paired with a long-term memory store such as [pi-canon](https://github.com/shaneconner/canon). Folding keeps the window lean; the store keeps what the session learned. That pairing is what the results below measure.
 
-## Why fold instead of compact
+## How it differs from compaction
 
-Compaction replaces the transcript with a summary and discards the originals. Folding replaces old spans with briefs and keeps the originals retrievable, so nothing is ever lost.
+Compaction replaces the transcript with a summary and discards the originals. It is simple, it works well, and it is a sound default for most sessions. Folding is an alternative shape: it replaces old spans with briefs and keeps the originals retrievable.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/shaneconner/fold/main/media/fold-vs-compaction-dark.svg">
@@ -33,7 +33,9 @@ On a 64-stage coding assignment over the curl codebase, followed by a 16-questio
 | Compaction + memory store | 14 / 16 | $202 | 9.0h |
 | **pi-fold + memory store** | **14 / 16** | **$101** | **5.2h** |
 
-Same recall, half the cost, and hours faster. The savings come from the cache: folding batches its rewrites so the provider replays the cached prefix instead of rereading the session from scratch, and roughly 95% of input in the pi-fold run was served from cache.
+In this test the pairing matched the recall of compaction with a memory store at about half the cost. The savings come from the cache: folding batches its rewrites so the provider replays the cached prefix instead of rereading the session from scratch, and roughly 95% of input in the pi-fold run was served from cache.
+
+This is a small number of runs on one task, aimed at two places where summary compaction looked weakest: cache cost and recall of detail. Read it as evidence on those two points, not as a claim that folding is the better approach overall.
 
 Full write-ups, data and logs are on Zenodo ([design](https://doi.org/10.5281/zenodo.21856873), [working memory](https://doi.org/10.5281/zenodo.21980746), [retrieval](https://doi.org/10.5281/zenodo.22142454), [rotation and retention](https://doi.org/10.5281/zenodo.22142456)), with friendlier versions on [Medium](https://medium.com/@shane.conner/a-compaction-summary-is-one-record-doing-a-stores-job-3f46212ef059) and [shaneconner.com](https://shaneconner.com/projects/pi-fold/).
 
@@ -89,6 +91,10 @@ The defaults are the benchmarked setup, so there's nothing you need to tune. To 
 **Peek and expand.** `peek` appends a verified, plain-text view of a fold's originals (without thinking blocks or provider metadata) for one turn, then steps aside. `expand` restores the original messages in place until the fold is refolded.
 
 **Plays well with Pi.** Pi's own compaction stays enabled underneath. Threshold compaction is skipped because folding gets there first, overflow is recovered by folding and retrying, and manual `/compact` still works as an escape hatch.
+
+## Status
+
+pi-fold is shared as a working tool and a set of results. It is not in daily use by its author at the moment, so issues and pull requests are answered as time allows.
 
 ## Prior work
 
