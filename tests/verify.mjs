@@ -19843,41 +19843,67 @@ async function gatePackageEntryIsTheWholeDeployment() {
  * cost the session its folding for as long as it stayed open, and the only surface that
  * said so was a red FOLDING STOPPED in the bar.
  *
+ * The same object is also a SOURCE: in Pi it sits on the session branch and in the context
+ * event's messages, and the fold path hashes every source message with the same serializer.
+ * So the fixture seats the decorated object itself, uncloned, in the branch and the messages
+ * the runtime folds, and the gate proves the whole path: no suspension anywhere, a commit
+ * that folds over it, a source digest equal to the Symbol-free copy's, and exact recovery of
+ * that fold from a JSON-reloaded branch, which is what the session looks like after a
+ * restart, with the Symbols gone.
+ *
  * ANTI-VACUITY: on 4.3.1 the same message leaves `automatic.automaticFailure` set and a
  * `context.suspend` record in the stream. The gate also asserts the usage row still lands,
- * so a fix that simply stopped hashing messages would fail it too.
+ * so a fix that simply stopped hashing messages would fail it too, and that the fold covers
+ * the decorated message, so a fix that kept it out of every fold would fail it as well.
  */
 async function gateForeignSymbolDoesNotStopFolding() {
   const built = makeFixture({ turns: 8, resultChars: 10_000, contextWindow: 100_000, sessionId: "foreign-symbol" });
   const runtime = makeRuntime(built);
   runtime.usage = { tokens: null, contextWindow: 100_000 };
-  await startRuntime(runtime);
 
   // The shape pi-subagents returns: a tool result carrying `usage` at the top level, with
-  // private Symbols keyed onto its nested child-run result.
-  const details = { mode: "single", runId: "run-1", results: [{ index: 0, agent: "scout", exitCode: 0 }] };
-  details.results[0][Symbol("remainingTimeoutMs")] = 90_000;
-  details.results[0][Symbol("afterCompactionSettlement")] = true;
-  const message = {
+  // private Symbols keyed onto its nested child-run result. Built twice from one literal,
+  // so the plain copy is exactly what JSON makes of the decorated one.
+  const subagentResult = () => ({
     role: "toolResult", toolCallId: "call-1", toolName: "subagent", isError: false,
-    content: [{ type: "text", text: "child finished" }],
-    details,
+    content: [{ type: "text", text: `child finished: ${"s".repeat(10_000)}` }],
+    details: { mode: "single", runId: "run-1", results: [{ index: 0, agent: "scout", exitCode: 0 }] },
     usage: { input: 5_449, output: 657, cacheRead: 9_984, cacheWrite: 0 },
     timestamp: 1,
-  };
-  // Handed over WITHOUT cloning: structuredClone drops Symbol keys, and the whole point is
-  // that the runtime sees the object another extension actually built.
+  });
+  const plain = subagentResult();
+  const message = subagentResult();
+  message.details.results[0][Symbol("remainingTimeoutMs")] = 90_000;
+  message.details.results[0][Symbol("afterCompactionSettlement")] = true;
+  assert.equal(json.stableStringify(JSON.parse(JSON.stringify(message))), json.stableStringify(plain),
+    "the fixture's plain copy is not what JSON makes of the decorated message");
+
+  // Seated WITHOUT cloning, after construction: makeRuntime and appendMessage both
+  // structuredClone, which drops Symbol keys, and the whole point is that the runtime sees
+  // the object another extension actually built, in the branch AND the context messages.
+  const sourceAt = runtime.branch.findIndex((entry) =>
+    entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolCallId === "call-1");
+  const messageAt = runtime.messages.findIndex((item) =>
+    item.role === "toolResult" && item.toolCallId === "call-1");
+  assert(sourceAt >= 0 && messageAt >= 0, "the fixture has no call-1 result to replace");
+  const sourceEntryId = runtime.branch[sourceAt].id;
+  runtime.branch[sourceAt].message = message;
+  runtime.messages[messageAt] = message;
+  for (const call of [runtime.branch[sourceAt - 1].message, runtime.messages[messageAt - 1]]) {
+    call.content[0].name = "subagent";
+  }
+  assert.equal(Object.getOwnPropertySymbols(runtime.branch[sourceAt].message.details.results[0]).length, 2,
+    "the branch lost the foreign Symbols before the runtime saw them");
+
+  await startRuntime(runtime);
   const eventsBefore = runtime.appended.length;
   await runtime.handlers.get("message_end")({ message }, runtime.ctx);
   await settle();
 
-  const events = runtime.appended
-    .slice(eventsBefore)
-    .filter((entry) => entry.customType === "pi-fold-context-event")
-    .map((entry) => entry.data);
-  const suspends = events.filter((record) => record.kind === "context.suspend");
-  assert.equal(suspends.length, 0,
-    `a foreign Symbol suspended folding: ${JSON.stringify(suspends[0]?.error ?? null)}`);
+  const events = contextEvents(runtime, eventsBefore);
+  const suspendsAtMessageEnd = events.filter((record) => record.kind === "context.suspend");
+  assert.equal(suspendsAtMessageEnd.length, 0,
+    `a foreign Symbol suspended folding: ${JSON.stringify(suspendsAtMessageEnd[0]?.error ?? null)}`);
   const status = await toolStatus(runtime);
   assert.equal(status.details.automatic.automaticFailure ?? null, null,
     "folding stayed suspended after one foreign symbol");
@@ -19888,24 +19914,46 @@ async function gateForeignSymbolDoesNotStopFolding() {
   const usage = events.find((record) => record.kind === "context.usage");
   assert(usage, "the foreign message produced no usage row");
   assert(/^[a-f0-9]{64}$/.test(usage.message_sha256), `the usage row has no digest: ${usage.message_sha256}`);
-  assert.equal(usage.message_sha256, json.evidenceSha256({
-    role: "toolResult", toolCallId: "call-1", toolName: "subagent", isError: false,
-    content: [{ type: "text", text: "child finished" }],
-    details: { mode: "single", runId: "run-1", results: [{ index: 0, agent: "scout", exitCode: 0 }] },
-    usage: { input: 5_449, output: 657, cacheRead: 9_984, cacheWrite: 0 },
-    timestamp: 1,
-  }), "the digest is not the JSON-visible projection of the message");
+  const plainSha256 = json.evidenceSha256(plain);
+  assert.equal(usage.message_sha256, plainSha256, "the digest is not the JSON-visible projection of the message");
 
-  // Folding still works afterwards: the same runtime reaches a commit when the boundary
-  // comes, which is what the suspension used to take away.
+  // Folding still works afterwards, OVER the decorated object: the same runtime reaches a
+  // commit when the boundary comes, which is what the suspension used to take away.
   await measure(runtime, 85_000, 100_000);
   await project(runtime);
   await settle();
   await compactBoundary(runtime);
   await runtimeCommit(runtime, { measured: false });
-  const folds = materialized(runtime).folds.length;
-  assert(folds > 0, "folding never produced work after the foreign symbol");
-  return { suspended: false, folds };
+  const suspends = contextEvents(runtime).filter((record) => record.kind === "context.suspend");
+  assert.equal(suspends.length, 0,
+    `a foreign Symbol suspended folding: ${JSON.stringify(suspends.map(({ phase, error }) => ({ phase, error })))}`);
+  const state = materialized(runtime);
+  assert(state.folds.length > 0, "folding never produced work after the foreign symbol");
+  const covering = state.folds.find((fold) =>
+    context.flattenFoldRefs(fold, state).some((ref) => ref.entryId === sourceEntryId));
+  assert(covering, "no fold covers the decorated message");
+  const sourceRef = context.flattenFoldRefs(covering, state).find((ref) => ref.entryId === sourceEntryId);
+  assert.equal(sourceRef.sha256, plainSha256, "the fold's source digest is not the Symbol-free copy's");
+
+  // A restart reads the session back from JSON, Symbols gone, and the fold still verifies:
+  // its record materializes unchanged and its exact source recovers to the plain copy.
+  const reloaded = JSON.parse(JSON.stringify(runtime.branch));
+  const reloadedState = context.materializeActiveContextState(reloaded, built.sessionId);
+  const reloadedFold = reloadedState.folds.find((fold) => fold.id === covering.id);
+  assert(reloadedFold, "the fold over the decorated message did not survive a reload");
+  assert.equal(reloadedFold.sourceSha256, covering.sourceSha256, "the reloaded fold names a different source");
+  const recovered = context.recoverFoldMessages({
+    foldId: covering.id, state: reloadedState, entries: reloaded, sessionId: built.sessionId,
+  });
+  assert(recovered.some((item) => json.stableStringify(item) === json.stableStringify(plain)),
+    "the reloaded fold does not recover the decorated message's plain bytes");
+  return {
+    suspended: false,
+    folds: state.folds.length,
+    coveringFold: covering.kind,
+    coveredRefs: context.flattenFoldRefs(covering, state).length,
+    recoveredAfterReload: recovered.length,
+  };
 }
 
 const gates = [

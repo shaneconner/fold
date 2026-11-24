@@ -2,7 +2,6 @@ import {
   denseOwnArrayValues,
   evidenceSha256,
   objectRefKey,
-  sha256Text,
   sha256Value,
   stableStringify,
   type EvidenceRef,
@@ -3805,29 +3804,6 @@ export function registerActiveContext(pi: any, options: {
     updateStatus(ctx);
   };
 
-/**
- * A DIGEST THAT CANNOT STOP FOLDING (issue #21, 2026-11-21).
- *
- * This is the one place that hashes a message nobody in this package built: a tool result
- * carrying another extension's details, decorated however that extension likes. An
- * unhashable foreign message costs one instrumentation column, and that is the whole of
- * what it may cost: the caller used to feed the throw to `suspendAutomatic`, which turned
- * one foreign Symbol into a session with folding switched off and a red FOLDING STOPPED as
- * the only surface that said so.
- *
- * The digest's job is to be the join key against provider-side telemetry, so a row without
- * one is worth less than a row with a coarser one: the fallback hashes what the host itself
- * persists for the same message, which is the canonical serializer for the session file.
- * Only a message neither serializer can read (a cycle, a proxy, an accessor) leaves the
- * column null, and it still leaves the row.
- */
-const evidenceDigestOrNull = (message: unknown): string | null => {
-  try { return evidenceSha256(message); }
-  catch { }
-  try { return sha256Text(JSON.stringify(message) ?? "null"); }
-  catch { return null; }
-};
-
   pi.on("message_end", async (event: Record<string, unknown>, ctx: any) => {
     if (lifecycle.shuttingDown) return;
     beginMutationPass();
@@ -3850,7 +3826,7 @@ const evidenceDigestOrNull = (message: unknown): string | null => {
           total_tokens: providerTokens(message),
           projection_change: observation.change,
           provider_side_miss: observation.providerSideMiss,
-          message_sha256: evidenceDigestOrNull(message),
+          message_sha256: evidenceSha256(message),
         });
       }
       const measurement = providerContextMeasurement(

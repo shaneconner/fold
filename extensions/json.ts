@@ -83,12 +83,13 @@ function safeJson(value: unknown, ancestors: unknown[]): string | undefined {
       // properties, and another extension can decorate an object it hands Pi with a
       // private Symbol: pi-subagents@0.89.2 marks its child-run result with
       // Symbol("remainingTimeoutMs") before returning it as tool result details. Throwing
-      // here made the message unhashable, and the caller that hashes the whole message on
-      // `message_end` treated that as a reason to suspend folding for the session — a
-      // failure with no owner, invisible in the transcript because JSON never showed the
-      // key. Skipping agrees with the host instead of refusing what the host itself
-      // serializes, and no canonical object this package builds ever carries a Symbol, so
-      // nothing this package proves about its own state is weakened.
+      // here made the message unhashable, so no fold could take it as a source, and the
+      // caller that hashes the whole message on `message_end` treated that as a reason to
+      // suspend folding for the session: a failure with no owner, invisible in the
+      // transcript because JSON never showed the key. Skipping agrees with the host, and
+      // a reloaded session, which has already lost the Symbols, hashes to the same digest.
+      // No canonical object this package builds ever carries a Symbol, so nothing this
+      // package proves about its own state is weakened.
       if (typeof key !== "string") continue;
       const descriptor = getOwnPropertyDescriptor(value, key);
       if (!descriptor || !("value" in descriptor)) throw new Error("Value contains an object accessor");
