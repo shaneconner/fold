@@ -19956,6 +19956,73 @@ async function gateForeignSymbolDoesNotStopFolding() {
   };
 }
 
+/**
+ * GATE 191: A PARTIAL RESULT SAYS IT IS PARTIAL (issue #23, 2026-11-24).
+ *
+ * Through 4.3.2 any `read` result over 16 KB reached the model as its first 16 KB and a
+ * line reading `[Exact evidence: <path>; sha256=...; bytes=N]`. Nothing said the rest was
+ * missing. A reporter's agent read a 33,746-byte file, appended to what it was shown and
+ * wrote the result back at 21,313 bytes with that line inside it, and did the same to a
+ * second file for a 73-line loss.
+ *
+ * Two claims. A `read` under the window share reaches the model whole, because the 16 KB
+ * cut on reads is deleted. And every projection that is still cut (an oversized result,
+ * a bash tail) ends in a line that says so in words, names how much is shown, and tells
+ * the reader not to write it back.
+ *
+ * ANTI-VACUITY: on 4.3.2 the hook returns a projection for the 40,000-byte read, so the
+ * first assertion fails.
+ */
+async function gatePartialResultSaysItIsPartial() {
+  const scratch = await mkdtemp(join(tmpdir(), "pi-fold-partial-"));
+  try {
+    const window = 128_000;
+    const built = makeFixture({ turns: 4, resultChars: 4_000, contextWindow: window, sessionId: "partial-result" });
+    const runtime = makeRuntime(built, { registerEvidence: true, sessionFile: join(scratch, "session.jsonl") });
+    runtime.usage = { tokens: null, contextWindow: window };
+    await startRuntime(runtime);
+    const hook = runtime.handlers.get("tool_result");
+
+    // The reporter's shape: a file just over twice the old threshold.
+    const file = Array.from({ length: 800 }, (_, line) => `line ${line}: ${"m".repeat(40)}`).join("\n");
+    assert(Buffer.byteLength(file) > 2 * evidenceModule.TOOL_RESULT_PROJECTION_BYTES);
+    assert.equal(await hook({
+      toolName: "read", toolCallId: "whole-read", isError: false,
+      content: [{ type: "text", text: file }], details: {},
+    }, runtime.ctx), undefined, "a read under the window share was cut before the model saw it");
+
+    // A read large enough to crowd the window is still cut, and now says so.
+    const cap = policyModule.oversizedToolResultBytes(window);
+    const huge = "h".repeat(cap + 10_000);
+    const head = await hook({
+      toolName: "read", toolCallId: "huge-read", isError: false,
+      content: [{ type: "text", text: huge }], details: {},
+    }, runtime.ctx);
+    const headText = head?.content?.[0]?.text ?? "";
+    const headLine = headText.slice(headText.lastIndexOf("\n") + 1);
+    assert(headLine.startsWith("[Truncated by pi-fold: only the first "), `the head projection ends: ${headLine.slice(0, 80)}`);
+    assert(headLine.includes("This is not the whole result"), "the line does not say the result is partial");
+    assert(headLine.includes("do not write it back"), "the line does not warn against writing it back");
+    assert(headLine.includes(`Exact original (${Buffer.byteLength(huge)} bytes): ${head.details.evidence.path}`),
+      "the line does not name the exact original and its size");
+    const shown = Number(/only the first (\d+) bytes/.exec(headLine)?.[1]);
+    assert.equal(shown, Buffer.byteLength(headText.slice(0, headText.lastIndexOf("\n\n"))),
+      "the line misstates how much is shown");
+    assert.equal(await readFile(head.details.evidence.path, "utf8"), huge);
+
+    // The tail form says "last": a bash projection keeps the end of its output.
+    const tail = evidenceModule.projectEvidenceText(
+      "t".repeat(50_000), { path: "/x/artifact.txt", sha256: "0".repeat(64), bytes: 50_000, projection: {} },
+      "utf8-tail", undefined, true,
+    );
+    assert(/\[Truncated by pi-fold: only the last \d+ bytes are shown above\. This is not the whole result/
+      .test(tail.content[0].text), "the tail projection does not say it is partial");
+    return { wholeReadBytes: Buffer.byteLength(file), cutAbove: cap, shown };
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
 const gates = [
   [1, "Registration, parse and deployment branding", gateRegistrationAndBranding],
   [2, "The durable record: lattice, chain and rollback", gateDurableRecord],
@@ -20093,6 +20160,7 @@ const gates = [
   [187, "Peek reads plain history while preserving exact restoration", gatePeekOmitsThinkingWithoutChangingSource],
   [188, "One tool result cannot wedge the session", gateOneToolResultCannotWedgeTheSession],
   [190, "A foreign Symbol does not stop folding", gateForeignSymbolDoesNotStopFolding],
+  [191, "A partial result says it is partial", gatePartialResultSaysItIsPartial],
   [189, "The package entry is the whole deployment", gatePackageEntryIsTheWholeDeployment],
   [174, "A bounded delta run keeps the replay bounded", gateBoundedDeltaRun],
   [175, "A fold is proven once per replay", gateFoldProvenOncePerReplay],
