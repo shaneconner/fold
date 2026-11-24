@@ -319,8 +319,16 @@ function hasImage(content) {
   return false;
 }
 
-function referenceLine(descriptor) {
-  return `[Exact evidence: ${descriptor.path}; sha256=${descriptor.sha256}; bytes=${descriptor.bytes}]`;
+// THE LINE SAYS THE RESULT IS CUT (issue #23, 2026-11-24). It used to read
+// `[Exact evidence: <path>; sha256=...; bytes=N]`, which names an artifact and says nothing
+// about the text above it being partial. Twice an agent read a file, took the projection
+// for the whole of it, appended, and wrote the result back: 33,746 bytes became 21,313 with
+// this line persisted as file content. A partial result has to say so in words a model
+// cannot take for metadata.
+function referenceLine(descriptor, shownBytes, tail) {
+  return `[Truncated by pi-fold: only the ${tail ? "last" : "first"} ${shownBytes} bytes are shown above. ` +
+    "This is not the whole result, so do not write it back as if it were. " +
+    `Exact original (${descriptor.bytes} bytes): ${descriptor.path}; sha256=${descriptor.sha256}]`;
 }
 
 function replacementBytes(content, details) {
@@ -355,7 +363,10 @@ export function projectEvidenceText(
   maximumPreviewBytes = TOOL_RESULT_PROJECTION_BYTES,
 ) {
   const preview = tail ? utf8Tail(text, maximumPreviewBytes) : utf8Head(text, maximumPreviewBytes);
-  const content = [{ type: "text", text: `${preview}\n\n${referenceLine(descriptor)}` }];
+  const content = [{
+    type: "text",
+    text: `${preview}\n\n${referenceLine(descriptor, utf8Bytes(preview), tail)}`,
+  }];
   const details = copyOwnDataRecord(originalDetails);
   details.evidence = descriptor;
   descriptor.projection.strategy = strategy;
@@ -612,21 +623,10 @@ export function registerEvidenceIngestion(pi, {
     }
 
     const text = textContent(ownDataProperty(event, "content"));
-    if (toolName === "read" && utf8Bytes(text) > TOOL_RESULT_PROJECTION_BYTES) {
-      const descriptor = await writeEvidenceArtifact({
-        sessionFile,
-        ownerKind: "pi-session",
-        ownerId: sessionId,
-        bytes: Buffer.from(text, "utf8"),
-        mediaType: "text/plain",
-        encoding: "utf-8",
-        source: { toolName, toolCallId, artifactKind: "read-result" },
-        evidenceDirectory,
-      });
-      const truncation = boundedTruncation(ownDataProperty(details, "truncation"));
-      return projectEvidenceText(text, descriptor, "utf8-head", truncation ? { truncation } : undefined);
-    }
-
+    // A `read` IS NOT CUT AT 16 KB ANY MORE (issue #23, 2026-11-24). Pi caps its own reads
+    // and says so, the file is still on disk, and the share below already keeps one result
+    // from crowding the window, so the cut bought nothing a fold does not buy later. What
+    // it cost was the model's view of a file it had just asked for.
     if (mcpServerForTool(toolName, null) !== null) {
       const envelope = eventEnvelope(event);
       const serialized = `${stableStringify(envelope)}\n`;
