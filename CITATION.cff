@@ -6,7 +6,7 @@ type: software
 authors:
   - family-names: Conner
     given-names: Shane
-version: 4.3.2
+version: 4.3.3
 date-released: 2026-11-24
 license: MIT
 repository-code: "https://github.com/shaneconner/fold"
