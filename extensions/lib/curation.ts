@@ -187,6 +187,62 @@ export function receiptLine(receipt: ContextReceipt): string {
   return parts.filter(Boolean).join(" ");
 }
 
+// A NOTICE, NOT A REPORT: the status line is one line, and a toast that wraps four times
+// is one nobody finishes reading. The bounded fallback keeps the fact even when the
+// count of folds is absurd.
+const COMMIT_NOTICE_BYTES = 400;
+
+/**
+ * THE COMMIT TELLS THE PERSON (issue #23, 2026-11-24).
+ *
+ * WHAT THIS ANSWERS. A reporter with a 1M-token window ran pi-fold for six weeks and found
+ * that every fold they ever noticed had happened mid-send, with nothing on screen saying
+ * so: 13 of their 19 commits were the projection fence, which fires because the request
+ * being assembled will not fit and cannot wait for a boundary. The receipt that describes
+ * a commit already existed, but it is written for the AGENT (ordinals, mark counts, tool
+ * names) and reaches it inside the projection, so the one surface a person was watching
+ * said nothing. "My transcript rewrote itself and I found out afterwards" is a disclosure
+ * failure, not a preference, and it is the reason the reporter uninstalled.
+ *
+ * WHAT IT SAYS, AND WHO IT IS FOR. No ordinals, no fold ids, no tool names: a person has
+ * one question and a second: what changed, why now, and what did I lose. The answer to
+ * the third is in `minTarget` — nothing, the text stays on disk — so it is stated last
+ * and names the one command that opens it.
+ *
+ * THE REASON IS THE TRIGGER, IN WORDS. `projection-budget` is the only one that cannot be
+ * predicted from a number on a status line, so it is the only one that names itself as a
+ * surprise: the fence runs on the request that does not fit, which is why a fold can
+ * arrive in the middle of a send rather than at a boundary.
+ */
+export function commitNoticeText(input: {
+	brandNoun?: string;
+	trigger: string | null;
+	foldsCommitted: number;
+	freedTokens: number;
+}): string {
+	// THE NOUN, NOT THE CARRIER'S NAME. `contextBrand` appends "context" for the places that
+	// name the service to the agent; a toast to a person says "pi-fold folded 12 spans".
+	const brand = input.brandNoun ?? DEFAULT_ACTIVE_CONTEXT_BRAND_NOUN;
+	const why = input.trigger === "projection-budget"
+		? "because the next request would not have fit, so this landed mid-send rather than at a boundary"
+		: input.trigger === "band-top"
+			? "because the window reached its commit point"
+			: input.trigger === "compaction-boundary"
+				? "at Pi's compaction boundary"
+				: "automatically";
+	// Grouped the way `foldNoticeText` groups tokens: a five- or six-digit figure read in one
+	// glance is the difference between "about 24k left" and a number nobody parses.
+	const freed = input.freedTokens > 0
+		? ` About ${Math.round(input.freedTokens).toLocaleString("en-US")} token(s) left the window.`
+		: "";
+	return boundReceiptText(
+		`${brand} folded ${input.foldsCommitted} completed span(s) of this chat into briefs ${why}.${freed}` +
+			" Nothing was thrown away: the exact text stays on disk and expands in place with /fold-editor.",
+		COMMIT_NOTICE_BYTES,
+		`${brand} committed a fold ${why}; the exact text stays on disk.`,
+	);
+}
+
 export function receiptBlockText(input: {
   receipts: readonly ContextReceipt[];
   toolName: string;
