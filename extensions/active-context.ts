@@ -154,6 +154,7 @@ import {
   markSpanRefs,
 } from "./lib/scheduling.ts";
 import {
+  commitNoticeText,
   contextReceipt,
   foldNoticeText,
   foldStatusText,
@@ -3466,14 +3467,45 @@ export function registerActiveContext(pi: any, options: {
     ladder.actionQueue = queued.catch(() => undefined);
     return queued;
   };
-  const attemptAutomaticCommit = (
+  /**
+   * THE ONE PLACE AN AUTOMATIC COMMIT TELLS THE PERSON (issue #23, 2026-11-24).
+   *
+   * Every automatic trigger reaches the runtime through here: the projection fence, the
+   * band top, Pi's compaction boundary, and the recovery paths. The user's own `/fold`
+   * does not, which is the split that matters: a command the person typed already answers
+   * itself, and an event they did not ask for has to say what it did.
+   *
+   * The receipt that describes a commit is written for the AGENT and lands inside the
+   * projection, so a person watching the chat saw a fold arrive with nothing explaining
+   * it. On a 1M window that is the whole observed behaviour, because the fence is the
+   * only trigger that fires there and it fires mid-send. The notice is a UI toast, so it
+   * costs no tokens and cannot move the prefix.
+   */
+  const attemptAutomaticCommit = async (
     snapshot: ActiveContextSnapshot,
     ctx: any,
     trigger: string,
     waiverRatio: number | null,
-  ): Promise<Record<string, unknown> | null> => queueAutomatic(
-    snapshot, waiverRatio ?? 1, ctx, trigger, () => runCommitEpoch(snapshot, trigger, true, waiverRatio),
-  );
+  ): Promise<Record<string, unknown> | null> => {
+    const epoch = await queueAutomatic(
+      snapshot, waiverRatio ?? 1, ctx, trigger, () => runCommitEpoch(snapshot, trigger, true, waiverRatio),
+    );
+    // NOTHING COMMITTED IS NOT NEWS. The fence loops when a reduction did not fit, so a
+    // pass that applied no mark stays silent and only a real rewrite speaks.
+    const applied = Number(epoch?.appliedMarks ?? 0);
+    if (Number.isFinite(applied) && applied > 0) {
+      const freedBytes = Number(epoch?.sourceBytesSaved ?? 0);
+      safeNotify(ctx, commitNoticeText({
+        brandNoun,
+        trigger,
+        foldsCommitted: applied,
+        freedTokens: Number.isFinite(freedBytes) && freedBytes > 0
+          ? Math.ceil(freedBytes / projectionCharsPerToken())
+          : 0,
+      }), trigger === "projection-budget" ? "warning" : "info");
+    }
+    return epoch;
+  };
   const projectionCandidates = (ctx: any): Array<Record<string, unknown>> => {
     if (lifecycle.shuttingDown || !persistence.state) return [];
     try {

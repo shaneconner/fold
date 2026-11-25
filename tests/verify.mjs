@@ -20023,6 +20023,127 @@ async function gatePartialResultSaysItIsPartial() {
   }
 }
 
+/**
+ * GATE 192: THE COMMIT TELLS THE PERSON (issue #23, 2026-11-24).
+ *
+ * One law: an automatic commit that rewrites the transcript says so, on a surface a
+ * person reads, in words they can act on.
+ *
+ * The reporter ran pi-fold six weeks on a 1M window and every fold they noticed had
+ * happened mid-send: 13 of their 19 commits were the projection fence, which cannot announce
+ * itself in advance because it runs on the request that does not fit. The receipt that
+ * describes a commit existed, but it is written for the agent (ordinals, mark counts, tool
+ * names) and reaches it inside the projection, so the person watched a rewrite land with
+ * nothing explaining it. They uninstalled over it, and the disclosure gap — not the folding
+ * — is what the fix is for.
+ *
+ * ANTI-VACUITY: on 4.3.3 nothing calls `commitNoticeText`, so both the band-top assertion
+ * and the fence assertion find no notice at all.
+ */
+async function gateTheCommitTellsThePerson() {
+  const noticesFor = (runtime) => runtime.notifications.filter((note) =>
+    /completed span\(s\) of this chat into briefs/.test(note.message));
+  const commitsOf = (runtime) => contextEvents(runtime)
+    .filter((record) => record.kind === "context.commit" && record.deferred === false);
+
+  // (a) THE BAND TOP SPEAKS, as an ordinary automatic commit.
+  const window = 200_000;
+  const budget = 120_000;
+  const thresholds = { ...context.DEFAULT_THRESHOLDS, maxTarget: 0.50, minTarget: 0.20 };
+  const bandBuilt = makeFixture({ sessionId: "person-notice-band", turns: 26, resultChars: 14_000, contextWindow: window });
+  const bandRuntime = makeRuntime(bandBuilt, { providerInputBudget: budget, thresholds });
+  await startRuntime(bandRuntime);
+  await measure(bandRuntime, Math.ceil(thresholds.maxTarget * budget) + 4_000, window);
+  await project(bandRuntime);
+  await settle();
+  const bandCommits = commitsOf(bandRuntime);
+  assert.equal(bandCommits.length, 1, `the band top produced ${bandCommits.length} commits`);
+  assert.equal(bandCommits[0].trigger, "band-top");
+  assert(bandCommits[0].applied_marks > 0, "the band-top commit applied no marks");
+  const bandNotices = noticesFor(bandRuntime);
+  assert.equal(bandNotices.length, 1, `the band-top commit told the person ${bandNotices.length} times`);
+  assert.equal(bandNotices[0].level, "info", `an ordinary commit spoke at level ${bandNotices[0].level}`);
+  assert(bandNotices[0].message.includes("because the window reached its commit point"),
+    `the notice does not say why it happened: ${bandNotices[0].message}`);
+  assert(bandNotices[0].message.includes(`${bandCommits[0].applied_marks} completed span(s)`),
+    `the notice does not count what moved: ${bandNotices[0].message}`);
+  assert(bandNotices[0].message.includes("/fold-editor"),
+    "the notice does not say how to open the exact text");
+  // Human words only: no ordinals, no fold ids, and never the agent's tool name.
+  assert(!/fold_[0-9a-f]{16,}/.test(bandNotices[0].message), "the notice printed a fold id");
+  assert(!/ordinal/i.test(bandNotices[0].message), "the notice printed an ordinal");
+  for (const toolName of bandRuntime.tools.keys()) {
+    assert(!bandNotices[0].message.includes(toolName), `the notice named the agent's tool ${toolName}`);
+  }
+  assert(bandNotices[0].message.length <= 400, `the notice is ${bandNotices[0].message.length} chars`);
+
+  // (b) THE PERSON'S OWN COMMAND IS NOT ANNOUNCED BACK AT THEM. /fold already printed what
+  // it did; a second notice for the same rewrite is the noise this gate exists to avoid.
+  const beforeCommand = noticesFor(bandRuntime).length;
+  await bandRuntime.commands.get("fold").handler("", bandRuntime.ctx);
+  await settle();
+  assert.equal(noticesFor(bandRuntime).length, beforeCommand,
+    "the /fold command announced itself a second time as an automatic commit");
+
+  // (c) THE FENCE NAMES ITSELF AS THE SURPRISE. It is the only trigger that cannot be read
+  // off a status line in advance, because it runs on the request that does not fit.
+  const fence = curationModule.commitNoticeText({
+    trigger: "projection-budget", foldsCommitted: 12, freedTokens: 24_120,
+  });
+  assert(fence.includes("would not have fit") && fence.includes("mid-send"),
+    `the fence notice does not say it landed mid-send: ${fence}`);
+  assert(fence.includes("24,120 token(s)"),
+    `the fence notice does not state the freed mass: ${fence}`);
+  assert(fence.includes("stays on disk") && fence.includes("/fold-editor"),
+    "the fence notice does not say what was preserved or how to reach it");
+  // The bound holds even when the numbers are absurd.
+  for (const [spans, freed] of [[9, 120], [999_999, 9_999_999], [12_345_678, 987_654_321]]) {
+    const loud = curationModule.commitNoticeText({
+      trigger: "projection-budget", foldsCommitted: spans, freedTokens: freed,
+    });
+    assert(loud.length <= 400, `the notice is ${loud.length} chars for ${spans} spans`);
+    assert(loud.startsWith("pi-fold folded"), `the notice lost the fact: ${loud}`);
+  }
+
+  // (d) THE FENCE IN THE RUNTIME, not just its wording: a fixture whose projection cannot
+  // fit its serving budget commits through the fence, and that commit speaks at warning.
+  // The fixture carries more text than its serving budget can hold, and the measurement
+  // sits under `maxTarget`, so nothing but the fence can fire.
+  const fenceBudget = 60_000;
+  const fenceBuilt = makeFixture({ sessionId: "person-notice-fence", turns: 26, resultChars: 40_000, contextWindow: window });
+  // NO VIEW CLIPPING: the fence measures the projection, and clipping old tool results
+  // would shrink it below the budget and hide the very trigger under test.
+  const fenceRuntime = makeRuntime(fenceBuilt, {
+    providerInputBudget: fenceBudget, thresholds: context.DEFAULT_THRESHOLDS, toolFoldThreshold: 0,
+  });
+  await startRuntime(fenceRuntime);
+  // THE SHAPE THE FENCE EXISTS FOR, and the reporter's shape: the window itself is
+  // comfortable, and the request being assembled is what does not fit. Occupancy stays far
+  // under `maxTarget`, so the band top cannot fire and only the fence can.
+  await measure(fenceRuntime, Math.round(fenceBudget * 0.35), window);
+  fenceRuntime.appendMessage({
+    role: "user",
+    content: [{ type: "text", text: `One more request, much larger than the window: ${"q".repeat(2_000_000)}` }],
+    timestamp: 9_999,
+  }, "fence-inflow");
+  await project(fenceRuntime);
+  await settle();
+  const fenceCommits = commitsOf(fenceRuntime).filter((record) => record.trigger === "projection-budget");
+  assert(fenceCommits.length >= 1,
+    `the fence applied nothing on a projection over its budget (commits: ${JSON.stringify(commitsOf(fenceRuntime).map((c) => c.trigger))})`);
+  const fenceNotices = noticesFor(fenceRuntime);
+  assert(fenceNotices.length >= 1, "the fence committed and told the person nothing");
+  assert(fenceNotices.every((note) => note.level === "warning"),
+    `the fence spoke at ${JSON.stringify(fenceNotices.map((note) => note.level))}`);
+  assert(fenceNotices[0].message.includes("mid-send"),
+    `the runtime fence notice does not say it landed mid-send: ${fenceNotices[0].message}`);
+
+  return {
+    bandTop: { commits: bandCommits.length, level: bandNotices[0].level, chars: bandNotices[0].message.length },
+    fence: { commits: fenceCommits.length, notices: fenceNotices.length, level: fenceNotices[0].level },
+  };
+}
+
 const gates = [
   [1, "Registration, parse and deployment branding", gateRegistrationAndBranding],
   [2, "The durable record: lattice, chain and rollback", gateDurableRecord],
@@ -20161,6 +20282,7 @@ const gates = [
   [188, "One tool result cannot wedge the session", gateOneToolResultCannotWedgeTheSession],
   [190, "A foreign Symbol does not stop folding", gateForeignSymbolDoesNotStopFolding],
   [191, "A partial result says it is partial", gatePartialResultSaysItIsPartial],
+  [192, "The commit tells the person", gateTheCommitTellsThePerson],
   [189, "The package entry is the whole deployment", gatePackageEntryIsTheWholeDeployment],
   [174, "A bounded delta run keeps the replay bounded", gateBoundedDeltaRun],
   [175, "A fold is proven once per replay", gateFoldProvenOncePerReplay],

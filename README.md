@@ -45,6 +45,7 @@ Full write-ups, data and logs are on Zenodo ([design](https://doi.org/10.5281/ze
 - **Lossless recall.** Every brief links back to the original messages, verified by hash. The agent can `peek` at them or `expand` them back in place.
 - **A cache-friendly cadence.** Marks cost nothing. All of them land together in one commit, so the cache is spent once per commit instead of on every change.
 - **A clean chat.** Folded spans collapse into a single muted row in the chat, so your screen matches what the model actually sees.
+- **A commit says so.** When an automatic commit rewrites the transcript, a notice tells you what moved, why it fired (the projection fence fires mid-send because the request being assembled would not fit), and that the exact text is still on disk. `/fold` answers itself and is not announced twice.
 - **The fold bar.** A compact usage bar above Pi's footer shows how full the window is and what's in it, from deeply folded to still raw.
 
 <picture>
